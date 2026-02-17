@@ -31,6 +31,13 @@ export default function JournalRow({ trade }: Props) {
     : null;
   const maePct = trade.mae ? (trade.mae * 100).toFixed(2) : '\u2014';
   const mfePct = trade.mfe ? (trade.mfe * 100).toFixed(2) : '\u2014';
+  const isLong = trade.side === 'B';
+  const maePx = trade.mae
+    ? formatPrice(trade.entry_px * (isLong ? 1 - trade.mae : 1 + trade.mae))
+    : null;
+  const mfePx = trade.mfe
+    ? formatPrice(trade.entry_px * (isLong ? 1 + trade.mfe : 1 - trade.mfe))
+    : null;
   const fees = trade.fees ? `-$${trade.fees.toFixed(2)}` : '$0.00';
   const actualRR = trade.mae && trade.mfe ? (trade.mfe / trade.mae).toFixed(2) : '\u2014';
 
@@ -92,8 +99,14 @@ export default function JournalRow({ trade }: Props) {
             </div>
           )}
         </div>
-        <div className="jcol-mae secondary-text" style={{ fontSize: 11 }}>{maePct}%</div>
-        <div className="jcol-mfe secondary-text" style={{ fontSize: 11 }}>{mfePct}%</div>
+        <div className="jcol-mae secondary-text" style={{ fontSize: 11 }}>
+          <div>{maePct}%</div>
+          {maePx && <div style={{ fontSize: 10, opacity: 0.7 }}>{maePx}</div>}
+        </div>
+        <div className="jcol-mfe secondary-text" style={{ fontSize: 11 }}>
+          <div>{mfePct}%</div>
+          {mfePx && <div style={{ fontSize: 10, opacity: 0.7 }}>{mfePx}</div>}
+        </div>
         <div className="jcol-fees secondary-text" style={{ fontSize: 11 }}>{fees}</div>
         <div className="jcol-pnl">
           <span className={`pnl-badge ${isWin ? 'win' : 'loss'}`}>
@@ -120,8 +133,8 @@ export default function JournalRow({ trade }: Props) {
                 ['Size', `${trade.size.toFixed(4)} ${trade.coin}`],
                 ['Notional', `$${notional}`],
                 ['Hold Time', holdStr],
-                ['MAE', <span className="loss-text">{maePct}%</span>],
-                ['MFE', <span className="profit-text">{mfePct}%</span>],
+                ['MAE', <span className="loss-text">{maePct}%{maePx && <span className="secondary-text" style={{ fontSize: 10, marginLeft: 4 }}>({maePx})</span>}</span>],
+                ['MFE', <span className="profit-text">{mfePct}%{mfePx && <span className="secondary-text" style={{ fontSize: 10, marginLeft: 4 }}>({mfePx})</span>}</span>],
                 ['Actual R:R', <span className={parseFloat(String(actualRR)) >= 1 ? 'profit-text' : 'loss-text'}>{actualRR}</span>],
                 ['Gross PnL', <span className={`${trade.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>{formatPnl(trade.pnl)}</span>],
                 ['Fees', <span className="loss-text">{fees}</span>],
