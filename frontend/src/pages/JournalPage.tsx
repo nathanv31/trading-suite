@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTrades } from '../context/TradeContext';
 import JournalRow from '../components/Journal/JournalRow';
@@ -7,6 +7,9 @@ import DateFilter from '../components/DateFilter';
 
 const PER_PAGE = 20;
 
+type SortCol = 'symbol' | 'side' | 'time' | 'hold' | 'entry' | 'mae' | 'mfe' | 'fees' | 'pnl';
+type SortDir = 'desc' | 'asc';
+
 export default function JournalPage() {
   const { trades, loading, error, refreshTrades, tagMap, allTags } = useTrades();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -14,10 +17,20 @@ export default function JournalPage() {
   const [sideFilter, setSideFilter] = useState('');
   const [resultFilter, setResultFilter] = useState('');
   const [coinFilter, setCoinFilter] = useState('');
-  const [sortMode, setSortMode] = useState('newest');
+  const [sortCol, setSortCol] = useState<SortCol | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [tagLogic, setTagLogic] = useState<'any' | 'all'>('any');
   const [dateGroupBy, setDateGroupBy] = useState<'open' | 'close'>('open');
+
+  const cycleSort = useCallback((col: SortCol) => {
+    setSortCol(prev => {
+      if (prev !== col) { setSortDir('desc'); return col; }
+      if (sortDir === 'desc') { setSortDir('asc'); return col; }
+      setSortDir('desc'); return null;
+    });
+    setPage(1);
+  }, [sortDir]);
 
   const dateFrom = searchParams.get('from') || '';
   const dateTo = searchParams.get('to') || '';
@@ -60,13 +73,29 @@ export default function JournalPage() {
       });
     }
 
-    if (sortMode === 'newest') list.sort((a, b) => b.open_time - a.open_time);
-    else if (sortMode === 'oldest') list.sort((a, b) => a.open_time - b.open_time);
-    else if (sortMode === 'pnl_desc') list.sort((a, b) => b.pnl - a.pnl);
-    else if (sortMode === 'pnl_asc') list.sort((a, b) => a.pnl - b.pnl);
+    if (!sortCol) {
+      list.sort((a, b) => b.open_time - a.open_time);
+    } else {
+      const dir = sortDir === 'desc' ? -1 : 1;
+      list.sort((a, b) => {
+        let cmp = 0;
+        switch (sortCol) {
+          case 'symbol': cmp = a.coin.localeCompare(b.coin); break;
+          case 'side': cmp = a.side.localeCompare(b.side); break;
+          case 'time': cmp = a.open_time - b.open_time; break;
+          case 'hold': cmp = (a.hold_ms ?? 0) - (b.hold_ms ?? 0); break;
+          case 'entry': cmp = a.entry_px - b.entry_px; break;
+          case 'mae': cmp = (a.mae ?? 0) - (b.mae ?? 0); break;
+          case 'mfe': cmp = (a.mfe ?? 0) - (b.mfe ?? 0); break;
+          case 'fees': cmp = a.fees - b.fees; break;
+          case 'pnl': cmp = (a.pnl - a.fees) - (b.pnl - b.fees); break;
+        }
+        return cmp * dir;
+      });
+    }
 
     return list;
-  }, [trades, sideFilter, resultFilter, coinFilter, sortMode, selectedTags, tagLogic, tagMap, dateFrom, dateTo, dateGroupBy]);
+  }, [trades, sideFilter, resultFilter, coinFilter, sortCol, sortDir, selectedTags, tagLogic, tagMap, dateFrom, dateTo, dateGroupBy]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
   const currentPage = Math.min(page, totalPages);
@@ -136,12 +165,6 @@ export default function JournalPage() {
           onTagsChange={tags => { setSelectedTags(tags); setPage(1); }}
           onLogicChange={setTagLogic}
         />
-        <select className="filter-select" value={sortMode} onChange={e => setSortMode(e.target.value)}>
-          <option value="newest">Newest First</option>
-          <option value="oldest">Oldest First</option>
-          <option value="pnl_desc">Best PnL</option>
-          <option value="pnl_asc">Worst PnL</option>
-        </select>
         <div className="ml-auto secondary-text text-xs">
           Showing {start + 1}&ndash;{Math.min(start + PER_PAGE, filtered.length)} of {filtered.length}
         </div>
@@ -150,15 +173,29 @@ export default function JournalPage() {
       {/* Column Headers */}
       <div className="journal-header text-xs secondary-text mb-2">
         <div style={{ width: 4, flexShrink: 0 }} />
-        <div className="jcol-symbol">Symbol</div>
-        <div className="jcol-side">Side &amp; Size</div>
-        <div className="jcol-times">Open &amp; Close</div>
-        <div className="jcol-hold">Hold Time</div>
-        <div className="jcol-entry">Entry &rarr; Exit</div>
-        <div className="jcol-mae">MAE</div>
-        <div className="jcol-mfe">MFE</div>
-        <div className="jcol-fees">Fees</div>
-        <div className="jcol-pnl">PnL</div>
+        <div style={{ width: 28, flexShrink: 0 }} />
+        {([
+          ['symbol', 'Symbol'],
+          ['side', 'Side & Size'],
+          ['time', 'Open & Close'],
+          ['hold', 'Hold Time'],
+          ['entry', 'Entry \u2192 Exit'],
+          ['mae', 'MAE'],
+          ['mfe', 'MFE'],
+          ['fees', 'Fees'],
+          ['pnl', 'PnL'],
+        ] as [SortCol, string][]).map(([col, label]) => (
+          <div
+            key={col}
+            className={`jcol-${col === 'time' ? 'times' : col} journal-sort-header${sortCol === col ? ' active' : ''}`}
+            onClick={() => cycleSort(col)}
+          >
+            {label}
+            {sortCol === col && (
+              <span className="sort-indicator">{sortDir === 'desc' ? ' \u25BC' : ' \u25B2'}</span>
+            )}
+          </div>
+        ))}
         <div style={{ width: 28, flexShrink: 0 }} />
       </div>
 

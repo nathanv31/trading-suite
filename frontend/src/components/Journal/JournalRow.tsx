@@ -108,7 +108,7 @@ export default function JournalRow({ trade }: Props) {
           <span className="hold-badge">{holdStr}</span>
         </div>
         <div className="jcol-entry" style={{ fontSize: 11 }}>
-          <div>{entryStr} <span className="secondary-text">\u2192</span> {exitStr}</div>
+          <div>{entryStr} <span className="secondary-text">{'\u2192'}</span> {exitStr}</div>
           {pctChg !== null && (
             <div className={parseFloat(pctChg) >= 0 ? 'profit-text' : 'loss-text'} style={{ fontSize: 10 }}>
               {pctChg}%

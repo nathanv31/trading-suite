@@ -158,6 +158,12 @@ body {
   padding: 0 12px 8px;
   border-bottom: 1px solid var(--border-color);
 }
+.journal-sort-header {
+  cursor: pointer; user-select: none; transition: color 0.15s;
+}
+.journal-sort-header:hover { color: var(--text-primary); }
+.journal-sort-header.active { color: var(--accent-yellow); }
+.sort-indicator { font-size: 9px; }
 .jcol-symbol  { width: 80px; flex-shrink: 0; }
 .jcol-side    { width: 100px; flex-shrink: 0; }
 .jcol-times   { width: 190px; flex-shrink: 0; }
