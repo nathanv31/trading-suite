@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from 'react';
+import { useMemo } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, TimeScale, ArcElement, Filler, Tooltip } from 'chart.js';
 import 'chartjs-adapter-luxon';
 import { Line, Doughnut } from 'react-chartjs-2';
@@ -8,7 +8,7 @@ import { formatCurrency, formatPnl, formatVolume, formatDate, formatTime, format
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, TimeScale, ArcElement, Filler, Tooltip);
 
 export default function HomePage() {
-  const { trades, loading } = useTrades();
+  const { trades, loading, error, refreshTrades } = useTrades();
 
   const metrics = useMemo(() => {
     if (!trades.length) return null;
@@ -58,8 +58,31 @@ export default function HomePage() {
     );
   }
 
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="metric-card" style={{ padding: 32, textAlign: 'center' }}>
+          <div className="loss-text mb-2" style={{ fontSize: 14 }}>Failed to load trades</div>
+          <div className="secondary-text mb-4" style={{ fontSize: 13 }}>{error}</div>
+          <button className="btn-primary" onClick={refreshTrades} disabled={loading}>
+            {loading ? 'Retrying...' : 'Retry'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!metrics) {
-    return <div className="p-6 secondary-text">No trades found for this wallet</div>;
+    return (
+      <div className="p-6">
+        <div className="metric-card" style={{ padding: 32, textAlign: 'center' }}>
+          <div className="secondary-text mb-4" style={{ fontSize: 14 }}>No trades found for this wallet</div>
+          <button className="btn-primary" onClick={refreshTrades} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh Trades'}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (

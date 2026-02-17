@@ -5,7 +5,7 @@ import JournalRow from '../components/Journal/JournalRow';
 const PER_PAGE = 20;
 
 export default function JournalPage() {
-  const { trades, loading } = useTrades();
+  const { trades, loading, error, refreshTrades } = useTrades();
   const [page, setPage] = useState(1);
   const [sideFilter, setSideFilter] = useState('');
   const [resultFilter, setResultFilter] = useState('');
@@ -38,6 +38,20 @@ export default function JournalPage() {
     return (
       <div className="flex items-center justify-center" style={{ height: 200 }}>
         <div className="spinner" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="metric-card" style={{ padding: 32, textAlign: 'center' }}>
+          <div className="loss-text mb-2" style={{ fontSize: 14 }}>Failed to load trades</div>
+          <div className="secondary-text mb-4" style={{ fontSize: 13 }}>{error}</div>
+          <button className="btn-primary" onClick={refreshTrades} disabled={loading}>
+            {loading ? 'Retrying...' : 'Retry'}
+          </button>
+        </div>
       </div>
     );
   }

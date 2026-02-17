@@ -124,7 +124,12 @@ def get_trades():
         return jsonify(cached)
 
     # Fetch from Hyperliquid
-    trades = _fetch_and_process(wallet)
+    try:
+        trades = _fetch_and_process(wallet)
+    except Exception as e:
+        print(f"[TRADES] Error fetching trades: {e}")
+        return jsonify({"error": f"Failed to fetch trades from Hyperliquid: {e}"}), 502
+
     # Re-load from DB to get auto-generated IDs
     result = _load_cached_trades(wallet)
     return jsonify(result or [])
@@ -136,7 +141,12 @@ def refresh_trades():
     wallet = _get_wallet()
     if not wallet:
         return jsonify({"error": "wallet query parameter is required"}), 400
-    trades = _fetch_and_process(wallet)
+    try:
+        trades = _fetch_and_process(wallet)
+    except Exception as e:
+        print(f"[TRADES] Error refreshing trades: {e}")
+        return jsonify({"error": f"Failed to fetch trades from Hyperliquid: {e}"}), 502
+
     result = _load_cached_trades(wallet)
     return jsonify(result or [])
 
@@ -147,7 +157,12 @@ def get_state():
     wallet = _get_wallet()
     if not wallet:
         return jsonify({"error": "wallet query parameter is required"}), 400
-    state = hl.fetch_user_state(wallet)
+    try:
+        state = hl.fetch_user_state(wallet)
+    except Exception as e:
+        print(f"[TRADES] Error fetching state: {e}")
+        return jsonify({"error": f"Failed to fetch account state: {e}"}), 502
+
     return jsonify(state)
 
 
@@ -158,5 +173,10 @@ def get_candles():
     interval = request.args.get("interval", "5m")
     start_time = int(request.args.get("start", 0))
     end_time = int(request.args.get("end", int(time.time() * 1000)))
-    candles = hl.fetch_candles(coin, interval, start_time, end_time)
+    try:
+        candles = hl.fetch_candles(coin, interval, start_time, end_time)
+    except Exception as e:
+        print(f"[TRADES] Error fetching candles: {e}")
+        return jsonify({"error": f"Failed to fetch candle data: {e}"}), 502
+
     return jsonify(candles if isinstance(candles, list) else [])

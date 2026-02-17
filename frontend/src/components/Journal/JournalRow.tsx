@@ -12,7 +12,7 @@ export default function JournalRow({ trade }: Props) {
   const [notes, setNotes] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
-  const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const isWin = trade.pnl > 0;
   const openDt = new Date(trade.open_time);

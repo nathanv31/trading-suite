@@ -1,5 +1,4 @@
 import type { Trade } from '../types';
-import { formatHold } from './formatters';
 
 export interface AnalyticsStats {
   netPnl: number;

@@ -8,7 +8,7 @@ import { Line, Bar, Doughnut, Scatter } from 'react-chartjs-2';
 import { useTrades } from '../context/TradeContext';
 import { computeStats } from '../utils/tradeStats';
 import { formatHold, formatCurrency } from '../utils/formatters';
-import type { Trade } from '../types';
+
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, TimeScale, Filler, Tooltip, Legend);
 
@@ -18,7 +18,7 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 export default function AnalyticsPage() {
-  const { trades, loading } = useTrades();
+  const { trades, loading, error, refreshTrades } = useTrades();
   const [sideFilter, setSideFilter] = useState('');
   const [resultFilter, setResultFilter] = useState('');
   const [coinFilter, setCoinFilter] = useState('');
@@ -104,6 +104,20 @@ export default function AnalyticsPage() {
 
   if (loading) {
     return <div className="flex items-center justify-center" style={{ height: 200 }}><div className="spinner" /></div>;
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="metric-card" style={{ padding: 32, textAlign: 'center' }}>
+          <div className="loss-text mb-2" style={{ fontSize: 14 }}>Failed to load trades</div>
+          <div className="secondary-text mb-4" style={{ fontSize: 13 }}>{error}</div>
+          <button className="btn-primary" onClick={refreshTrades} disabled={loading}>
+            {loading ? 'Retrying...' : 'Retry'}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (!stats) {

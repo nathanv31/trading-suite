@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useTrades } from '../context/TradeContext';
 import { dateToKey, formatHold, formatPnl, MONTHS } from '../utils/formatters';
 import { getDayNote, saveDayNote, getWeekNote, saveWeekNote } from '../api/client';
@@ -8,7 +8,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 const DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
 export default function CalendarPage() {
-  const { trades, loading } = useTrades();
+  const { trades, loading, error, refreshTrades } = useTrades();
   const now = new Date();
   const [calYear, setCalYear] = useState(now.getFullYear());
   const [calMonth, setCalMonth] = useState(now.getMonth());
@@ -129,6 +129,20 @@ export default function CalendarPage() {
 
   if (loading) {
     return <div className="flex items-center justify-center" style={{ height: 200 }}><div className="spinner" /></div>;
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="metric-card" style={{ padding: 32, textAlign: 'center' }}>
+          <div className="loss-text mb-2" style={{ fontSize: 14 }}>Failed to load trades</div>
+          <div className="secondary-text mb-4" style={{ fontSize: 13 }}>{error}</div>
+          <button className="btn-primary" onClick={refreshTrades} disabled={loading}>
+            {loading ? 'Retrying...' : 'Retry'}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const today = new Date(); today.setHours(0,0,0,0);
