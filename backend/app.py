@@ -25,5 +25,5 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    print("[APP] Starting Flask server on http://localhost:5000")
-    app.run(debug=True, port=5000)
+    print("[APP] Starting Flask server on http://localhost:5001")
+    app.run(debug=True, port=5001)

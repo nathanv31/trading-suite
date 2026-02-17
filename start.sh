@@ -28,7 +28,7 @@ fi
 source venv/bin/activate
 pip install -q -r requirements.txt
 
-echo "==> Starting backend on :5000..."
+echo "==> Starting backend on :5001..."
 python app.py &
 BACKEND_PID=$!
 
