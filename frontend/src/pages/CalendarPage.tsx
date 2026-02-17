@@ -212,7 +212,7 @@ export default function CalendarPage() {
                     <div className="cal-week-gutter-content">
                       <div className="cal-week-gutter-dot" style={{ background: weekPnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)' }} />
                       <div className="cal-week-gutter-pnl" style={{ color: weekPnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)' }}>
-                        {weekPnl >= 0 ? '+' : ''}{formatPnl(weekPnl)}
+                        {formatPnl(weekPnl)}
                       </div>
                     </div>
                   ) : (
@@ -243,7 +243,7 @@ export default function CalendarPage() {
                       {data && (
                         <div className="cal-cell-data">
                           <div className={`cal-cell-pnl ${data.pnl >= 0 ? 'profit' : 'loss'}`}>
-                            {data.pnl >= 0 ? '+' : ''}{formatPnl(data.pnl)}
+                            {formatPnl(data.pnl)}
                           </div>
                           <div className="cal-cell-count">
                             {data.trades.length} trade{data.trades.length !== 1 ? 's' : ''}
@@ -322,6 +322,15 @@ export default function CalendarPage() {
             {(!selectedDayData || selectedDayData.trades.length === 0) && (
               <div className="secondary-text text-xs" style={{ padding: '8px 0' }}>No trades</div>
             )}
+
+            {/* View in Journal button */}
+            <button
+              className="cal-journal-btn"
+              style={{ marginTop: 16 }}
+              onClick={() => navigate(`/journal?from=${selectedDayKey}&to=${selectedDayKey}`)}
+            >
+              View Day in Journal
+            </button>
           </div>
         )}
 
@@ -440,7 +449,16 @@ export default function CalendarPage() {
             {/* View in Journal button */}
             <button
               className="cal-journal-btn"
-              onClick={() => navigate('/journal')}
+              onClick={() => {
+                const cells = selectedWeekData.week.filter(c => c.date);
+                const first = cells[0]?.date;
+                const last = cells[cells.length - 1]?.date;
+                if (first && last) {
+                  navigate(`/journal?from=${dateToKey(first)}&to=${dateToKey(last)}`);
+                } else {
+                  navigate('/journal');
+                }
+              }}
             >
               View Week in Journal
             </button>

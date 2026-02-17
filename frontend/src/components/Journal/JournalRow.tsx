@@ -16,7 +16,8 @@ export default function JournalRow({ trade }: Props) {
   const [tagInput, setTagInput] = useState('');
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const isWin = trade.pnl > 0;
+  const netPnl = trade.pnl - trade.fees;
+  const isWin = netPnl > 0;
   const openDt = new Date(trade.open_time);
   const closeDt = trade.close_time ? new Date(trade.close_time) : null;
   const holdStr = formatHold(trade.hold_ms);
@@ -96,7 +97,7 @@ export default function JournalRow({ trade }: Props) {
         <div className="jcol-fees secondary-text" style={{ fontSize: 11 }}>{fees}</div>
         <div className="jcol-pnl">
           <span className={`pnl-badge ${isWin ? 'win' : 'loss'}`}>
-            {formatPnl(trade.pnl)}
+            {formatPnl(netPnl)}
           </span>
         </div>
         <button className={`expand-btn ${expanded ? 'open' : ''}`} onClick={e => { e.stopPropagation(); setExpanded(!expanded); }}>

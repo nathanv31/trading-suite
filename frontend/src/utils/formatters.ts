@@ -18,8 +18,8 @@ export function formatCurrency(value: number, decimals = 2): string {
 }
 
 export function formatPnl(value: number, decimals = 2): string {
-  const sign = value >= 0 ? '+' : '';
-  return `${sign}$${value.toFixed(decimals)}`;
+  const sign = value >= 0 ? '+' : '-';
+  return `${sign}$${Math.abs(value).toFixed(decimals)}`;
 }
 
 export function formatPercent(value: number, decimals = 2): string {

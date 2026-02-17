@@ -213,7 +213,8 @@ export default function HomePage() {
       <div className="metric-card">
         <h3 className="text-xl font-bold mb-4">Last 3 Trades</h3>
         {recentTrades.map(trade => {
-          const isWin = trade.pnl > 0;
+          const netPnl = trade.pnl - trade.fees;
+          const isWin = netPnl > 0;
           return (
             <div key={trade.id} className="trade-row">
               <div className={`trade-bar ${isWin ? 'win' : 'loss'}`} />
@@ -241,7 +242,7 @@ export default function HomePage() {
                   <div>
                     <div className="secondary-text">PnL</div>
                     <div className={`${isWin ? 'profit-text' : 'loss-text'} font-bold`}>
-                      {formatPnl(trade.pnl)}
+                      {formatPnl(netPnl)}
                     </div>
                   </div>
                 </div>

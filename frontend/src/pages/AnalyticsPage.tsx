@@ -44,8 +44,8 @@ export default function AnalyticsPage() {
   const filtered = useMemo(() => {
     let list = [...trades];
     if (sideFilter) list = list.filter(t => t.side === sideFilter);
-    if (resultFilter === 'win') list = list.filter(t => t.pnl > 0);
-    if (resultFilter === 'loss') list = list.filter(t => t.pnl < 0);
+    if (resultFilter === 'win') list = list.filter(t => (t.pnl - t.fees) > 0);
+    if (resultFilter === 'loss') list = list.filter(t => (t.pnl - t.fees) < 0);
     if (coinFilter) list = list.filter(t => t.coin === coinFilter);
 
     // Tag filter
@@ -123,11 +123,13 @@ export default function AnalyticsPage() {
   const streakData = useMemo(() => {
     let sk = 0;
     return sorted.map((t, i) => {
+      const n = t.pnl - t.fees;
       const prev = i > 0 ? sorted[i - 1] : null;
-      if (!prev) sk = t.pnl > 0 ? 1 : -1;
-      else if (t.pnl > 0 && prev.pnl > 0) sk = sk > 0 ? sk + 1 : 1;
-      else if (t.pnl < 0 && prev.pnl < 0) sk = sk < 0 ? sk - 1 : -1;
-      else sk = t.pnl > 0 ? 1 : -1;
+      const pn = prev ? prev.pnl - prev.fees : 0;
+      if (!prev) sk = n > 0 ? 1 : -1;
+      else if (n > 0 && pn > 0) sk = sk > 0 ? sk + 1 : 1;
+      else if (n < 0 && pn < 0) sk = sk < 0 ? sk - 1 : -1;
+      else sk = n > 0 ? 1 : -1;
       return { x: new Date(t.open_time), y: sk };
     });
   }, [sorted]);
@@ -288,7 +290,7 @@ export default function AnalyticsPage() {
           <div className="an-module-header"><span className="an-chart-title">P&L Distribution</span></div>
           <div style={{ height: 200 }}>
             {(() => {
-              const pnls = filtered.map(t => t.pnl);
+              const pnls = filtered.map(t => t.pnl - t.fees);
               const minP = Math.min(...pnls), maxP = Math.max(...pnls);
               const bc = 12, bs = (maxP - minP) / bc || 1;
               const db = Array(bc).fill(0);
@@ -315,8 +317,8 @@ export default function AnalyticsPage() {
           <div style={{ height: 200 }}>
             <Scatter data={{
               datasets: [
-                { label: 'Win', data: filtered.filter(t => t.pnl > 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(78,201,176,0.6)', pointRadius: 4 },
-                { label: 'Loss', data: filtered.filter(t => t.pnl < 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(244,135,113,0.6)', pointRadius: 4 },
+                { label: 'Win', data: filtered.filter(t => (t.pnl - t.fees) > 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(78,201,176,0.6)', pointRadius: 4 },
+                { label: 'Loss', data: filtered.filter(t => (t.pnl - t.fees) < 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(244,135,113,0.6)', pointRadius: 4 },
               ]
             }} options={{
               responsive: true, maintainAspectRatio: false,

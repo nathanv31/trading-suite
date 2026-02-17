@@ -448,9 +448,9 @@ body {
 
 /* Sidebar (day or week detail) */
 .cal-sidebar {
-  width: 320px; flex-shrink: 0;
+  width: 440px; flex-shrink: 0;
   background: var(--bg-secondary); border: 1px solid var(--border-color);
-  border-radius: 12px; padding: 20px;
+  border-radius: 12px; padding: 24px;
   max-height: calc(100vh - 140px); overflow-y: auto;
 }
 .cal-sidebar-header {
