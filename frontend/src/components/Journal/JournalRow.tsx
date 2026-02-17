@@ -2,12 +2,14 @@ import { useState, useEffect, useRef } from 'react';
 import type { Trade } from '../../types';
 import { formatHold, formatPrice, formatPnl, formatTime } from '../../utils/formatters';
 import { getTradeNotes, saveTradeNotes, getTradeTags, addTradeTag, removeTradeTag } from '../../api/client';
+import { useTrades } from '../../context/TradeContext';
 
 interface Props {
   trade: Trade;
 }
 
 export default function JournalRow({ trade }: Props) {
+  const { reloadTags } = useTrades();
   const [expanded, setExpanded] = useState(false);
   const [notes, setNotes] = useState('');
   const [tags, setTags] = useState<string[]>([]);
@@ -52,11 +54,13 @@ export default function JournalRow({ trade }: Props) {
     await addTradeTag(trade.id, val).catch(() => {});
     setTags(prev => prev.includes(val) ? prev : [...prev, val]);
     setTagInput('');
+    reloadTags();
   }
 
   async function handleRemoveTag(tag: string) {
     await removeTradeTag(trade.id, tag).catch(() => {});
     setTags(prev => prev.filter(t => t !== tag));
+    reloadTags();
   }
 
   return (

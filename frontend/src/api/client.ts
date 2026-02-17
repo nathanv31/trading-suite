@@ -70,6 +70,11 @@ export async function getAllTags(): Promise<string[]> {
   return data.tags;
 }
 
+export async function getTradeTagsMap(wallet?: string): Promise<Record<string, string[]>> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<Record<string, string[]>>(`${BASE}/trade-tags${params}`);
+}
+
 // ── Screenshots ──
 
 export async function getTradeScreenshots(tradeId: number): Promise<Screenshot[]> {

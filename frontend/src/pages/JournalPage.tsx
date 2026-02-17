@@ -1,16 +1,19 @@
 import { useState, useMemo } from 'react';
 import { useTrades } from '../context/TradeContext';
 import JournalRow from '../components/Journal/JournalRow';
+import TagFilter from '../components/TagFilter';
 
 const PER_PAGE = 20;
 
 export default function JournalPage() {
-  const { trades, loading, error, refreshTrades } = useTrades();
+  const { trades, loading, error, refreshTrades, tagMap, allTags } = useTrades();
   const [page, setPage] = useState(1);
   const [sideFilter, setSideFilter] = useState('');
   const [resultFilter, setResultFilter] = useState('');
   const [coinFilter, setCoinFilter] = useState('');
   const [sortMode, setSortMode] = useState('newest');
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [tagLogic, setTagLogic] = useState<'any' | 'all'>('any');
 
   const coins = useMemo(() => [...new Set(trades.map(t => t.coin))].sort(), [trades]);
 
@@ -21,13 +24,25 @@ export default function JournalPage() {
     if (resultFilter === 'loss') list = list.filter(t => t.pnl < 0);
     if (coinFilter) list = list.filter(t => t.coin === coinFilter);
 
+    // Tag filter
+    if (selectedTags.size > 0) {
+      list = list.filter(t => {
+        const tradeTags = tagMap[String(t.id)] || [];
+        if (tagLogic === 'any') {
+          return tradeTags.some(tag => selectedTags.has(tag));
+        } else {
+          return [...selectedTags].every(tag => tradeTags.includes(tag));
+        }
+      });
+    }
+
     if (sortMode === 'newest') list.sort((a, b) => b.open_time - a.open_time);
     else if (sortMode === 'oldest') list.sort((a, b) => a.open_time - b.open_time);
     else if (sortMode === 'pnl_desc') list.sort((a, b) => b.pnl - a.pnl);
     else if (sortMode === 'pnl_asc') list.sort((a, b) => a.pnl - b.pnl);
 
     return list;
-  }, [trades, sideFilter, resultFilter, coinFilter, sortMode]);
+  }, [trades, sideFilter, resultFilter, coinFilter, sortMode, selectedTags, tagLogic, tagMap]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
   const currentPage = Math.min(page, totalPages);
@@ -74,6 +89,13 @@ export default function JournalPage() {
           <option value="">All Coins</option>
           {coins.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
+        <TagFilter
+          allTags={allTags}
+          selectedTags={selectedTags}
+          logic={tagLogic}
+          onTagsChange={tags => { setSelectedTags(tags); setPage(1); }}
+          onLogicChange={setTagLogic}
+        />
         <select className="filter-select" value={sortMode} onChange={e => setSortMode(e.target.value)}>
           <option value="newest">Newest First</option>
           <option value="oldest">Oldest First</option>

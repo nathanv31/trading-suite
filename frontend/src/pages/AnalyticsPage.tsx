@@ -10,6 +10,7 @@ import { useWallet } from '../context/WalletContext';
 import { computeStats } from '../utils/tradeStats';
 import { formatHold, formatCurrency, formatPnl } from '../utils/formatters';
 import { getPnlSummary } from '../api/client';
+import TagFilter from '../components/TagFilter';
 import type { PnlSummary } from '../types';
 
 
@@ -21,14 +22,16 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 export default function AnalyticsPage() {
-  const { trades, loading, error, refreshTrades } = useTrades();
+  const { trades, loading, error, refreshTrades, tagMap, allTags } = useTrades();
   const { wallet } = useWallet();
   const [sideFilter, setSideFilter] = useState('');
   const [resultFilter, setResultFilter] = useState('');
   const [coinFilter, setCoinFilter] = useState('');
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [tagLogic, setTagLogic] = useState<'any' | 'all'>('any');
   const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
 
-  const isUnfiltered = !sideFilter && !resultFilter && !coinFilter;
+  const isUnfiltered = !sideFilter && !resultFilter && !coinFilter && selectedTags.size === 0;
 
   useEffect(() => {
     if (wallet && trades.length > 0) {
@@ -44,8 +47,21 @@ export default function AnalyticsPage() {
     if (resultFilter === 'win') list = list.filter(t => t.pnl > 0);
     if (resultFilter === 'loss') list = list.filter(t => t.pnl < 0);
     if (coinFilter) list = list.filter(t => t.coin === coinFilter);
+
+    // Tag filter
+    if (selectedTags.size > 0) {
+      list = list.filter(t => {
+        const tradeTags = tagMap[String(t.id)] || [];
+        if (tagLogic === 'any') {
+          return tradeTags.some(tag => selectedTags.has(tag));
+        } else {
+          return [...selectedTags].every(tag => tradeTags.includes(tag));
+        }
+      });
+    }
+
     return list;
-  }, [trades, sideFilter, resultFilter, coinFilter]);
+  }, [trades, sideFilter, resultFilter, coinFilter, selectedTags, tagLogic, tagMap]);
 
   const stats = useMemo(() => filtered.length > 0 ? computeStats(filtered) : null, [filtered]);
 
@@ -181,6 +197,13 @@ export default function AnalyticsPage() {
           <option value="">All Coins</option>
           {coins.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
+        <TagFilter
+          allTags={allTags}
+          selectedTags={selectedTags}
+          logic={tagLogic}
+          onTagsChange={setSelectedTags}
+          onLogicChange={setTagLogic}
+        />
         <div className="ml-auto secondary-text text-xs">{filtered.length} trades</div>
       </div>
 
