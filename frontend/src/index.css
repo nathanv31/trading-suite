@@ -577,7 +577,9 @@ body {
   background: var(--bg-secondary); border: 1px solid var(--border-color);
   border-radius: 12px; padding: 24px;
   max-height: calc(100vh - 140px); overflow-y: auto;
+  transition: width 0.25s ease;
 }
+.cal-sidebar.expanded { width: 65%; }
 .cal-sidebar-header {
   display: flex; align-items: flex-start; justify-content: space-between;
   margin-bottom: 16px; gap: 12px;

@@ -19,6 +19,7 @@ export default function CalendarPage() {
   const [selectedWeekKey, setSelectedWeekKey] = useState<string | null>(null);
   const [dayNote, setDayNote] = useState('');
   const [weekNotes, setWeekNotes] = useState<WeekNotes>({ review: '', well: '', improve: '' });
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
 
   // Build day map: YYYY-MM-DD -> { trades, pnl }
   // Allocate each trade to the date it was fully closed (fall back to open_time if still open)
@@ -264,16 +265,26 @@ export default function CalendarPage() {
 
         {/* Day Sidebar */}
         {selectedDayKey && selectedDate && (
-          <div className="cal-sidebar">
+          <div className={`cal-sidebar${sidebarExpanded ? ' expanded' : ''}`}>
             <div className="cal-sidebar-header">
               <h3 className="cal-sidebar-title">
                 {selectedDate.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
               </h3>
-              <button className="cal-sidebar-close" onClick={() => setSelectedDayKey(null)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 6L6 18M6 6l12 12" />
-                </svg>
-              </button>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button className="cal-sidebar-close" onClick={() => setSidebarExpanded(e => !e)} title={sidebarExpanded ? 'Collapse' : 'Expand'}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    {sidebarExpanded
+                      ? <><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="M14 10l7-7" /><path d="M3 21l7-7" /></>
+                      : <><path d="M15 3h6v6" /><path d="M9 21H3v-6" /><path d="M21 3l-7 7" /><path d="M3 21l7-7" /></>
+                    }
+                  </svg>
+                </button>
+                <button className="cal-sidebar-close" onClick={() => { setSelectedDayKey(null); setSidebarExpanded(false); }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
 
             {/* Summary card */}
@@ -337,7 +348,7 @@ export default function CalendarPage() {
 
         {/* Week Sidebar */}
         {selectedWeekData && selectedWeekKey && (
-          <div className="cal-sidebar">
+          <div className={`cal-sidebar${sidebarExpanded ? ' expanded' : ''}`}>
             <div className="cal-sidebar-header">
               <h3 className="cal-sidebar-title accent-text">
                 Week of {(() => {
@@ -347,11 +358,21 @@ export default function CalendarPage() {
                   return f && l ? `${f.getDate()} ${MONTHS[f.getMonth()]} \u2013 ${l.getDate()} ${MONTHS[l.getMonth()]}` : 'Weekly Review';
                 })()}
               </h3>
-              <button className="cal-sidebar-close" onClick={() => setSelectedWeekKey(null)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 6L6 18M6 6l12 12" />
-                </svg>
-              </button>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button className="cal-sidebar-close" onClick={() => setSidebarExpanded(e => !e)} title={sidebarExpanded ? 'Collapse' : 'Expand'}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    {sidebarExpanded
+                      ? <><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="M14 10l7-7" /><path d="M3 21l7-7" /></>
+                      : <><path d="M15 3h6v6" /><path d="M9 21H3v-6" /><path d="M21 3l-7 7" /><path d="M3 21l7-7" /></>
+                    }
+                  </svg>
+                </button>
+                <button className="cal-sidebar-close" onClick={() => { setSelectedWeekKey(null); setSidebarExpanded(false); }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
 
             {/* Week P&L Summary */}
