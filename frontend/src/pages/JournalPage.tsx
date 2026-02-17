@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useTrades } from '../context/TradeContext';
 import JournalRow from '../components/Journal/JournalRow';
 import TagFilter from '../components/TagFilter';
+import DateFilter from '../components/DateFilter';
 
 const PER_PAGE = 20;
 
@@ -16,6 +17,7 @@ export default function JournalPage() {
   const [sortMode, setSortMode] = useState('newest');
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [tagLogic, setTagLogic] = useState<'any' | 'all'>('any');
+  const [dateGroupBy, setDateGroupBy] = useState<'open' | 'close'>('open');
 
   const dateFrom = searchParams.get('from') || '';
   const dateTo = searchParams.get('to') || '';
@@ -25,14 +27,20 @@ export default function JournalPage() {
   const filtered = useMemo(() => {
     let list = [...trades];
 
-    // Date range filter (from calendar links)
+    // Date range filter
     if (dateFrom) {
       const fromTs = new Date(dateFrom + 'T00:00:00').getTime();
-      list = list.filter(t => t.open_time >= fromTs);
+      list = list.filter(t => {
+        const ts = dateGroupBy === 'close' && t.close_time ? t.close_time : t.open_time;
+        return ts >= fromTs;
+      });
     }
     if (dateTo) {
       const toTs = new Date(dateTo + 'T23:59:59.999').getTime();
-      list = list.filter(t => t.open_time <= toTs);
+      list = list.filter(t => {
+        const ts = dateGroupBy === 'close' && t.close_time ? t.close_time : t.open_time;
+        return ts <= toTs;
+      });
     }
 
     if (sideFilter) list = list.filter(t => t.side === sideFilter);
@@ -58,7 +66,7 @@ export default function JournalPage() {
     else if (sortMode === 'pnl_asc') list.sort((a, b) => a.pnl - b.pnl);
 
     return list;
-  }, [trades, sideFilter, resultFilter, coinFilter, sortMode, selectedTags, tagLogic, tagMap, dateFrom, dateTo]);
+  }, [trades, sideFilter, resultFilter, coinFilter, sortMode, selectedTags, tagLogic, tagMap, dateFrom, dateTo, dateGroupBy]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
   const currentPage = Math.min(page, totalPages);
@@ -91,6 +99,22 @@ export default function JournalPage() {
     <div className="p-6">
       {/* Filter Bar */}
       <div className="flex gap-3 mb-5 flex-wrap items-center">
+        <DateFilter
+          from={dateFrom}
+          to={dateTo}
+          onApply={(from, to, groupBy) => {
+            setDateGroupBy(groupBy);
+            const params: Record<string, string> = {};
+            if (from) params.from = from;
+            if (to) params.to = to;
+            setSearchParams(params);
+            setPage(1);
+          }}
+          onClear={() => {
+            setSearchParams({});
+            setPage(1);
+          }}
+        />
         <select className="filter-select" value={sideFilter} onChange={e => { setSideFilter(e.target.value); setPage(1); }}>
           <option value="">All Sides</option>
           <option value="B">Long</option>
@@ -118,12 +142,6 @@ export default function JournalPage() {
           <option value="pnl_desc">Best PnL</option>
           <option value="pnl_asc">Worst PnL</option>
         </select>
-        {(dateFrom || dateTo) && (
-          <span className="tag-chip" onClick={() => setSearchParams({})}>
-            {dateFrom === dateTo ? dateFrom : `${dateFrom} \u2013 ${dateTo}`}
-            <span className="del">&times;</span>
-          </span>
-        )}
         <div className="ml-auto secondary-text text-xs">
           Showing {start + 1}&ndash;{Math.min(start + PER_PAGE, filtered.length)} of {filtered.length}
         </div>
