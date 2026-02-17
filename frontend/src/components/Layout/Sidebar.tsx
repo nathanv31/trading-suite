@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
+import { useWallet } from '../../context/WalletContext';
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const { wallet, clearWallet } = useWallet();
+
+  const shortAddr = wallet ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : '';
 
   return (
-    <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
-      <div className="p-3">
+    <div className={`sidebar ${collapsed ? 'collapsed' : ''}`} style={{ display: 'flex', flexDirection: 'column' }}>
+      <div className="p-3 flex-1">
         <div className="flex items-center justify-between mb-8 px-1">
           <div className="flex items-center gap-3 min-w-0">
             <svg className="w-6 h-6 flex-shrink-0" style={{ color: 'var(--accent-yellow)' }} fill="currentColor" viewBox="0 0 24 24">
@@ -50,6 +54,23 @@ export default function Sidebar() {
             <span className="nav-label">Journal</span>
           </NavLink>
         </nav>
+      </div>
+
+      {/* Wallet info at bottom */}
+      <div className="p-3" style={{ borderTop: '1px solid var(--border-color)' }}>
+        <div
+          className="nav-item"
+          style={{ cursor: 'pointer', borderLeft: 'none', padding: '10px 14px' }}
+          onClick={clearWallet}
+          title="Disconnect wallet"
+        >
+          <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--text-secondary)' }}>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          <span className="nav-label" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+            {shortAddr}
+          </span>
+        </div>
       </div>
     </div>
   );

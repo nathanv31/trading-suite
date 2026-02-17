@@ -6,14 +6,15 @@ from flask import Blueprint, request, jsonify
 from db import get_db
 from hl_client import HyperliquidClient
 from trade_processor import process_fills_to_trades
-from config import DEFAULT_WALLET
-
 trades_bp = Blueprint("trades", __name__)
 hl = HyperliquidClient()
 
 
 def _get_wallet():
-    return request.args.get("wallet", DEFAULT_WALLET)
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return None
+    return wallet
 
 
 def _cache_fills(wallet, fills):
@@ -114,6 +115,8 @@ def _fetch_and_process(wallet):
 def get_trades():
     """Get all grouped trades. Uses cache if available."""
     wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
 
     # Try cache first
     cached = _load_cached_trades(wallet)
@@ -131,6 +134,8 @@ def get_trades():
 def refresh_trades():
     """Force re-fetch from Hyperliquid and reprocess."""
     wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
     trades = _fetch_and_process(wallet)
     result = _load_cached_trades(wallet)
     return jsonify(result or [])
@@ -140,6 +145,8 @@ def refresh_trades():
 def get_state():
     """Get current account state (positions, margin, etc.)."""
     wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
     state = hl.fetch_user_state(wallet)
     return jsonify(state)
 

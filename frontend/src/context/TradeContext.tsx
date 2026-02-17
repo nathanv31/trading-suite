@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import type { Trade } from '../types';
 import { getTrades, refreshTrades as apiRefresh } from '../api/client';
+import { useWallet } from './WalletContext';
 
 interface TradeContextValue {
   trades: Trade[];
@@ -17,35 +18,38 @@ const TradeContext = createContext<TradeContextValue>({
 });
 
 export function TradeProvider({ children }: { children: ReactNode }) {
+  const { wallet } = useWallet();
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadTrades = useCallback(async () => {
+    if (!wallet) return;
     try {
       setLoading(true);
       setError(null);
-      const data = await getTrades();
+      const data = await getTrades(wallet);
       setTrades(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load trades');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [wallet]);
 
   const refresh = useCallback(async () => {
+    if (!wallet) return;
     try {
       setLoading(true);
       setError(null);
-      const data = await apiRefresh();
+      const data = await apiRefresh(wallet);
       setTrades(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to refresh trades');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [wallet]);
 
   useEffect(() => {
     loadTrades();
