@@ -47,7 +47,7 @@ export function computeStats(trades: Trade[]): AnalyticsStats {
   const dailyMap: Record<string, number> = {};
   trades.forEach(t => {
     const k = new Date(t.open_time).toISOString().slice(0, 10);
-    dailyMap[k] = (dailyMap[k] || 0) + t.pnl;
+    dailyMap[k] = (dailyMap[k] || 0) + t.pnl - t.fees;
   });
   const dailyRets = Object.values(dailyMap);
   const meanRet = dailyRets.length ? dailyRets.reduce((s, v) => s + v, 0) / dailyRets.length : 0;
