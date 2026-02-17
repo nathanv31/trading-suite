@@ -281,11 +281,11 @@ body {
 .tag-input:focus { outline: none; border-color: var(--accent-yellow); }
 
 .tag-suggestions {
-  position: absolute; bottom: 100%; left: 0; width: 180px;
+  position: absolute; top: 100%; left: 0; width: 180px;
   max-height: 150px; overflow-y: auto;
   background: var(--bg-secondary); border: 1px solid var(--border-color);
-  border-radius: 4px; margin-bottom: 4px; z-index: 20;
-  box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
+  border-radius: 4px; margin-top: 4px; z-index: 20;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
 .tag-suggestion-item {
   padding: 4px 8px; font-size: 11px; cursor: pointer;
