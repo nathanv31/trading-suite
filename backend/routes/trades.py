@@ -166,6 +166,53 @@ def get_state():
     return jsonify(state)
 
 
+@trades_bp.route("/api/pnl-summary")
+def get_pnl_summary():
+    """Get PnL breakdown: gross trading PnL, fees, funding, and net total.
+
+    This lets the user verify the app's numbers against Hyperliquid's
+    portfolio stats, which include trading PnL + fees + funding.
+    """
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+
+    # Sum closedPnl and fees from all raw fills in the DB
+    conn = get_db()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(CAST(closed_pnl AS REAL)), 0) AS gross_pnl, "
+        "       COALESCE(SUM(CAST(fee AS REAL)), 0) AS total_fees "
+        "FROM fills WHERE wallet = ?",
+        (wallet,),
+    ).fetchone()
+    conn.close()
+
+    gross_pnl = row["gross_pnl"] if row else 0.0
+    total_fees = row["total_fees"] if row else 0.0
+
+    # Fetch funding payments from Hyperliquid
+    total_funding = None
+    try:
+        funding_data = hl.fetch_user_funding(wallet)
+        total_funding = sum(
+            float(f.get("delta", {}).get("usdc", 0)) for f in funding_data
+        )
+    except Exception as e:
+        print(f"[TRADES] Error fetching funding: {e}")
+
+    # Net PnL = gross trading pnl - fees + funding
+    net_pnl = gross_pnl - total_fees
+    if total_funding is not None:
+        net_pnl += total_funding
+
+    return jsonify({
+        "gross_pnl": round(gross_pnl, 6),
+        "total_fees": round(total_fees, 6),
+        "total_funding": round(total_funding, 6) if total_funding is not None else None,
+        "net_pnl": round(net_pnl, 6),
+    })
+
+
 @trades_bp.route("/api/candles")
 def get_candles():
     """Get candlestick data for a coin."""

@@ -25,7 +25,7 @@ export default function CalendarPage() {
       const key = dateToKey(d);
       if (!map[key]) map[key] = { trades: [], pnl: 0 };
       map[key].trades.push(t);
-      map[key].pnl += t.pnl;
+      map[key].pnl += t.pnl - t.fees;
     });
     return map;
   }, [trades]);
@@ -116,9 +116,9 @@ export default function CalendarPage() {
       const data = dayMap[dateToKey(c.date)];
       if (data) weekTrades.push(...data.trades);
     });
-    const pnl = weekTrades.reduce((s, t) => s + t.pnl, 0);
-    const wins = weekTrades.filter(t => t.pnl > 0);
-    const losses = weekTrades.filter(t => t.pnl < 0);
+    const pnl = weekTrades.reduce((s, t) => s + t.pnl - t.fees, 0);
+    const wins = weekTrades.filter(t => (t.pnl - t.fees) > 0);
+    const losses = weekTrades.filter(t => (t.pnl - t.fees) < 0);
     const winRate = weekTrades.length ? (wins.length / weekTrades.length * 100).toFixed(0) : '0';
     const fees = weekTrades.reduce((s, t) => s + t.fees, 0);
     const avgWin = wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
@@ -174,7 +174,7 @@ export default function CalendarPage() {
           {calendarWeeks.map((week, wi) => {
             const weekTrades: Trade[] = [];
             week.forEach(c => { if (c.date) { const d = dayMap[dateToKey(c.date)]; if (d) weekTrades.push(...d.trades); }});
-            const weekPnl = weekTrades.reduce((s, t) => s + t.pnl, 0);
+            const weekPnl = weekTrades.reduce((s, t) => s + t.pnl - t.fees, 0);
             const hasWeekTrades = weekTrades.length > 0;
             const weekFirst = week.find(c => c.date)?.date;
             const weekKey = weekFirst ? dateToKey(weekFirst) : `w${wi}`;

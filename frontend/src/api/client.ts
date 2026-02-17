@@ -1,4 +1,4 @@
-import type { Trade, TradeNote, TradeTag, Screenshot, WeekNotes } from '../types';
+import type { Trade, TradeNote, TradeTag, Screenshot, WeekNotes, PnlSummary } from '../types';
 
 const BASE = '/api';
 
@@ -126,6 +126,13 @@ export async function saveWeekNote(weekKey: string, notes: WeekNotes): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(notes),
   });
+}
+
+// ── PnL Summary ──
+
+export async function getPnlSummary(wallet?: string): Promise<PnlSummary> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<PnlSummary>(`${BASE}/pnl-summary${params}`);
 }
 
 // ── Candles ──

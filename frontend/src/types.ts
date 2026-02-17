@@ -42,6 +42,13 @@ export interface WeekNotes {
   improve: string;
 }
 
+export interface PnlSummary {
+  gross_pnl: number;
+  total_fees: number;
+  total_funding: number | null;
+  net_pnl: number;
+}
+
 export interface DateRange {
   start: Date;
   end?: Date;

@@ -1,14 +1,25 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, TimeScale, ArcElement, Filler, Tooltip } from 'chart.js';
 import 'chartjs-adapter-luxon';
 import { Line, Doughnut } from 'react-chartjs-2';
 import { useTrades } from '../context/TradeContext';
+import { useWallet } from '../context/WalletContext';
 import { formatCurrency, formatPnl, formatVolume, formatDate, formatTime, formatPrice } from '../utils/formatters';
+import { getPnlSummary } from '../api/client';
+import type { PnlSummary } from '../types';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, TimeScale, ArcElement, Filler, Tooltip);
 
 export default function HomePage() {
   const { trades, loading, error, refreshTrades } = useTrades();
+  const { wallet } = useWallet();
+  const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
+
+  useEffect(() => {
+    if (wallet && trades.length > 0) {
+      getPnlSummary(wallet).then(setPnlSummary).catch(() => {});
+    }
+  }, [wallet, trades]);
 
   const metrics = useMemo(() => {
     if (!trades.length) return null;
@@ -89,11 +100,32 @@ export default function HomePage() {
     <div className="p-6">
       {/* Top Metrics */}
       <div className="grid grid-cols-4 gap-6 mb-6">
-        {/* Portfolio Value */}
+        {/* Net PnL with breakdown */}
         <div className="metric-card">
-          <div className="secondary-text text-sm mb-2">Portfolio Value</div>
-          <div className="text-3xl font-bold accent-text">{formatCurrency(metrics.netPnl)}</div>
-          <div className="secondary-text text-sm mt-2">Total value of all assets</div>
+          <div className="secondary-text text-sm mb-2">Net PnL</div>
+          <div className={`text-3xl font-bold ${(pnlSummary?.net_pnl ?? metrics.netPnl) >= 0 ? 'profit-text' : 'loss-text'}`}>
+            {formatCurrency(pnlSummary?.net_pnl ?? metrics.netPnl)}
+          </div>
+          {pnlSummary && (
+            <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.8 }}>
+              <div className="flex justify-between">
+                <span className="secondary-text">Trading PnL</span>
+                <span>{formatPnl(pnlSummary.gross_pnl)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="secondary-text">Fees</span>
+                <span className="loss-text">-${pnlSummary.total_fees.toFixed(2)}</span>
+              </div>
+              {pnlSummary.total_funding !== null && (
+                <div className="flex justify-between">
+                  <span className="secondary-text">Funding</span>
+                  <span className={pnlSummary.total_funding >= 0 ? 'profit-text' : 'loss-text'}>
+                    {formatPnl(pnlSummary.total_funding)}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Win Rate Donut */}
@@ -148,7 +180,9 @@ export default function HomePage() {
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-xl font-bold">Lifetime PNL</h3>
         </div>
-        <div className="text-2xl font-bold mb-4 accent-text">{formatCurrency(metrics.netPnl)}</div>
+        <div className={`text-2xl font-bold mb-4 ${(pnlSummary?.net_pnl ?? metrics.netPnl) >= 0 ? 'profit-text' : 'loss-text'}`}>
+          {formatCurrency(pnlSummary?.net_pnl ?? metrics.netPnl)}
+        </div>
         <div style={{ height: 300 }}>
           <Line
             data={{

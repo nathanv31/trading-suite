@@ -118,8 +118,9 @@ export default function JournalRow({ trade }: Props) {
                 ['MAE', <span className="loss-text">{maePct}%</span>],
                 ['MFE', <span className="profit-text">{mfePct}%</span>],
                 ['Actual R:R', <span className={parseFloat(String(actualRR)) >= 1 ? 'profit-text' : 'loss-text'}>{actualRR}</span>],
+                ['Gross PnL', <span className={`${trade.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>{formatPnl(trade.pnl)}</span>],
                 ['Fees', <span className="loss-text">{fees}</span>],
-                ['Net PnL', <span className={`${isWin ? 'profit-text' : 'loss-text'} font-bold`}>{formatPnl(trade.pnl)}</span>],
+                ['Net PnL', <span className={`${(trade.pnl - trade.fees) >= 0 ? 'profit-text' : 'loss-text'} font-bold`}>{formatPnl(trade.pnl - trade.fees)}</span>],
               ].map(([label, value], i) => (
                 <div key={i} className="stat-row">
                   <span className="stat-label">{label}</span>
