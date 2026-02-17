@@ -21,10 +21,11 @@ export default function CalendarPage() {
   const [weekNotes, setWeekNotes] = useState<WeekNotes>({ review: '', well: '', improve: '' });
 
   // Build day map: YYYY-MM-DD -> { trades, pnl }
+  // Allocate each trade to the date it was fully closed (fall back to open_time if still open)
   const dayMap = useMemo(() => {
     const map: Record<string, { trades: Trade[]; pnl: number }> = {};
     trades.forEach(t => {
-      const d = new Date(t.open_time);
+      const d = new Date(t.close_time ?? t.open_time);
       const key = dateToKey(d);
       if (!map[key]) map[key] = { trades: [], pnl: 0 };
       map[key].trades.push(t);
