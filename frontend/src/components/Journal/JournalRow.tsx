@@ -9,12 +9,15 @@ interface Props {
 }
 
 export default function JournalRow({ trade }: Props) {
-  const { reloadTags } = useTrades();
+  const { reloadTags, allTags } = useTrades();
   const [expanded, setExpanded] = useState(false);
   const [notes, setNotes] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(0);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const suggestRef = useRef<HTMLDivElement>(null);
 
   const netPnl = trade.pnl - trade.fees;
   const isWin = netPnl > 0;
@@ -56,12 +59,26 @@ export default function JournalRow({ trade }: Props) {
     }, 500);
   }
 
-  async function handleAddTag() {
-    const val = tagInput.trim();
+  // Filter suggestions: case-insensitive, exclude already-applied tags
+  const suggestions = allTags.filter(t =>
+    !tags.some(existing => existing.toLowerCase() === t.toLowerCase()) &&
+    (tagInput === '' || t.toLowerCase().includes(tagInput.toLowerCase()))
+  );
+
+  async function handleAddTag(override?: string) {
+    const val = (override ?? tagInput).trim();
     if (!val) return;
+    // Don't add if already present (case-insensitive)
+    if (tags.some(t => t.toLowerCase() === val.toLowerCase())) {
+      setTagInput('');
+      setShowSuggestions(false);
+      return;
+    }
     await addTradeTag(trade.id, val).catch(() => {});
-    setTags(prev => prev.includes(val) ? prev : [...prev, val]);
+    setTags(prev => [...prev, val]);
     setTagInput('');
+    setShowSuggestions(false);
+    setHighlightIdx(0);
     reloadTags();
   }
 
@@ -169,16 +186,44 @@ export default function JournalRow({ trade }: Props) {
                   ))
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2" style={{ position: 'relative' }}>
                 <input
                   type="text"
                   className="tag-input"
                   placeholder="+ Add tag"
                   value={tagInput}
-                  onChange={e => setTagInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleAddTag()}
+                  onChange={e => { setTagInput(e.target.value); setHighlightIdx(0); setShowSuggestions(true); }}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                  onKeyDown={e => {
+                    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, suggestions.length - 1)); }
+                    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); }
+                    else if (e.key === 'Escape') { setShowSuggestions(false); }
+                    else if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (showSuggestions && suggestions.length > 0 && highlightIdx < suggestions.length) {
+                        handleAddTag(suggestions[highlightIdx]);
+                      } else {
+                        handleAddTag();
+                      }
+                    }
+                  }}
                 />
-                <button onClick={handleAddTag} className="page-btn" style={{ padding: '4px 10px' }}>Add</button>
+                <button onClick={() => handleAddTag()} className="page-btn" style={{ padding: '4px 10px' }}>Add</button>
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="tag-suggestions" ref={suggestRef}>
+                    {suggestions.map((s, i) => (
+                      <div
+                        key={s}
+                        className={`tag-suggestion-item${i === highlightIdx ? ' active' : ''}`}
+                        onMouseDown={() => handleAddTag(s)}
+                        onMouseEnter={() => setHighlightIdx(i)}
+                      >
+                        {s}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
