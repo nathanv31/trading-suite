@@ -40,6 +40,11 @@ export function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+export function formatDateTime(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 export function formatDateShort(d: Date): string {
   return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
 }

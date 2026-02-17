@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Trade } from '../../types';
-import { formatHold, formatPrice, formatPnl, formatTime } from '../../utils/formatters';
+import { formatHold, formatPrice, formatPnl, formatDateTime } from '../../utils/formatters';
 import { getTradeNotes, saveTradeNotes, getTradeTags, addTradeTag, removeTradeTag } from '../../api/client';
 import { useTrades } from '../../context/TradeContext';
 
@@ -95,15 +95,14 @@ export default function JournalRow({ trade }: Props) {
         <div className="coin-badge">{trade.coin.charAt(0)}</div>
         <div className="jcol-symbol">
           <div className="font-bold text-sm">{trade.coin}</div>
-          <div className="secondary-text" style={{ fontSize: 10 }}>{openDt.toLocaleDateString()}</div>
         </div>
         <div className="jcol-side">
           <div className={`text-xs ${sideCol} font-semibold`}>{sideStr}</div>
           <div className="secondary-text" style={{ fontSize: 11 }}>${notional}</div>
         </div>
         <div className="jcol-times secondary-text" style={{ fontSize: 11 }}>
-          <div>{formatTime(trade.open_time)}</div>
-          <div>{closeDt ? formatTime(trade.close_time!) : '\u2014'}</div>
+          <div>{formatDateTime(trade.open_time)}</div>
+          <div>{closeDt ? formatDateTime(trade.close_time!) : '\u2014'}</div>
         </div>
         <div className="jcol-hold">
           <span className="hold-badge">{holdStr}</span>

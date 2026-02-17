@@ -158,9 +158,9 @@ body {
   padding: 0 12px 8px;
   border-bottom: 1px solid var(--border-color);
 }
-.jcol-symbol  { width: 120px; flex-shrink: 0; }
+.jcol-symbol  { width: 80px; flex-shrink: 0; }
 .jcol-side    { width: 100px; flex-shrink: 0; }
-.jcol-times   { width: 160px; flex-shrink: 0; }
+.jcol-times   { width: 190px; flex-shrink: 0; }
 .jcol-hold    { width: 80px;  flex-shrink: 0; }
 .jcol-entry   { flex: 1; min-width: 160px; }
 .jcol-mae     { width: 80px;  flex-shrink: 0; text-align: right; }
