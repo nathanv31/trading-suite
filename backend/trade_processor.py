@@ -176,8 +176,8 @@ def _finalize_trade(t):
 
     pnl = t["realized_pnl"]
 
-    # Skip trades with zero PnL (likely data artifacts)
-    if abs(pnl) < 1e-9 and not t["orphan"]:
+    # Skip trades with zero PnL AND zero fees (true data artifacts)
+    if abs(pnl) < 1e-9 and abs(t["fees"]) < 1e-9 and not t["orphan"]:
         return None
 
     return {

@@ -124,7 +124,12 @@ def get_trades():
         return jsonify(cached)
 
     # Fetch from Hyperliquid
-    trades = _fetch_and_process(wallet)
+    try:
+        trades = _fetch_and_process(wallet)
+    except Exception as e:
+        print(f"[TRADES] Error fetching trades: {e}")
+        return jsonify({"error": f"Failed to fetch trades from Hyperliquid: {e}"}), 502
+
     # Re-load from DB to get auto-generated IDs
     result = _load_cached_trades(wallet)
     return jsonify(result or [])
@@ -136,7 +141,12 @@ def refresh_trades():
     wallet = _get_wallet()
     if not wallet:
         return jsonify({"error": "wallet query parameter is required"}), 400
-    trades = _fetch_and_process(wallet)
+    try:
+        trades = _fetch_and_process(wallet)
+    except Exception as e:
+        print(f"[TRADES] Error refreshing trades: {e}")
+        return jsonify({"error": f"Failed to fetch trades from Hyperliquid: {e}"}), 502
+
     result = _load_cached_trades(wallet)
     return jsonify(result or [])
 
@@ -147,8 +157,188 @@ def get_state():
     wallet = _get_wallet()
     if not wallet:
         return jsonify({"error": "wallet query parameter is required"}), 400
-    state = hl.fetch_user_state(wallet)
+    try:
+        state = hl.fetch_user_state(wallet)
+    except Exception as e:
+        print(f"[TRADES] Error fetching state: {e}")
+        return jsonify({"error": f"Failed to fetch account state: {e}"}), 502
+
     return jsonify(state)
+
+
+@trades_bp.route("/api/pnl-summary")
+def get_pnl_summary():
+    """Get PnL breakdown: gross trading PnL, fees, funding, and net total.
+
+    This lets the user verify the app's numbers against Hyperliquid's
+    portfolio stats, which include trading PnL + fees + funding.
+    """
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+
+    # Sum closedPnl and fees from all raw fills in the DB
+    conn = get_db()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(CAST(closed_pnl AS REAL)), 0) AS gross_pnl, "
+        "       COALESCE(SUM(CAST(fee AS REAL)), 0) AS total_fees "
+        "FROM fills WHERE wallet = ?",
+        (wallet,),
+    ).fetchone()
+    conn.close()
+
+    gross_pnl = row["gross_pnl"] if row else 0.0
+    total_fees = row["total_fees"] if row else 0.0
+
+    # Fetch funding payments from Hyperliquid
+    total_funding = None
+    try:
+        funding_data = hl.fetch_user_funding(wallet)
+        total_funding = sum(
+            float(f.get("delta", {}).get("usdc", 0)) for f in funding_data
+        )
+    except Exception as e:
+        print(f"[TRADES] Error fetching funding: {e}")
+
+    # Net PnL = gross trading pnl - fees + funding
+    net_pnl = gross_pnl - total_fees
+    if total_funding is not None:
+        net_pnl += total_funding
+
+    return jsonify({
+        "gross_pnl": round(gross_pnl, 6),
+        "total_fees": round(total_fees, 6),
+        "total_funding": round(total_funding, 6) if total_funding is not None else None,
+        "net_pnl": round(net_pnl, 6),
+    })
+
+
+def _cache_funding(wallet, funding_data):
+    """Store funding entries in SQLite, skipping duplicates."""
+    conn = get_db()
+    for f in funding_data:
+        try:
+            delta = f.get("delta", {})
+            conn.execute(
+                """INSERT OR IGNORE INTO funding (wallet, coin, usdc, time, hash)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    wallet,
+                    delta.get("coin", ""),
+                    float(delta.get("usdc", 0)),
+                    f["time"],
+                    f.get("hash", ""),
+                ),
+            )
+        except Exception as e:
+            print(f"[DB] Skipping funding entry: {e}")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_funding_cached(wallet):
+    """Fetch and cache funding if not already cached."""
+    conn = get_db()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM funding WHERE wallet = ?", (wallet,)
+    ).fetchone()[0]
+    conn.close()
+
+    if count == 0:
+        try:
+            funding_data = hl.fetch_user_funding(wallet)
+            _cache_funding(wallet, funding_data)
+        except Exception as e:
+            print(f"[TRADES] Error fetching funding: {e}")
+
+
+@trades_bp.route("/api/funding/daily")
+def get_daily_funding():
+    """Get funding payments grouped by day.
+
+    Returns { "YYYY-MM-DD": amount, ... } mapping each date
+    to the total funding received/paid that day.
+    """
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+
+    _ensure_funding_cached(wallet)
+
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT date(time / 1000, 'unixepoch') AS day, SUM(usdc) AS total
+           FROM funding WHERE wallet = ?
+           GROUP BY day ORDER BY day""",
+        (wallet,),
+    ).fetchall()
+    conn.close()
+
+    result = {row["day"]: round(row["total"], 6) for row in rows}
+    return jsonify(result)
+
+
+@trades_bp.route("/api/trades/<int:trade_id>/funding")
+def get_trade_funding(trade_id):
+    """Get funding payments attributed to a specific trade.
+
+    Matches funding entries by coin and time window (open_time to close_time).
+    """
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+
+    _ensure_funding_cached(wallet)
+
+    conn = get_db()
+    trade = conn.execute(
+        "SELECT coin, open_time, close_time FROM trades WHERE id = ? AND wallet = ?",
+        (trade_id, wallet),
+    ).fetchone()
+
+    if not trade:
+        conn.close()
+        return jsonify({"funding": 0, "count": 0})
+
+    coin = trade["coin"]
+    open_time = trade["open_time"]
+    close_time = trade["close_time"] or int(time.time() * 1000)
+
+    row = conn.execute(
+        """SELECT COALESCE(SUM(usdc), 0) AS total, COUNT(*) AS cnt
+           FROM funding
+           WHERE wallet = ? AND coin = ? AND time >= ? AND time <= ?""",
+        (wallet, coin, open_time, close_time),
+    ).fetchone()
+    conn.close()
+
+    return jsonify({
+        "funding": round(row["total"], 6) if row else 0,
+        "count": row["cnt"] if row else 0,
+    })
+
+
+@trades_bp.route("/api/funding/refresh", methods=["POST"])
+def refresh_funding():
+    """Force re-fetch funding data from Hyperliquid."""
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+
+    # Clear existing funding cache
+    conn = get_db()
+    conn.execute("DELETE FROM funding WHERE wallet = ?", (wallet,))
+    conn.commit()
+    conn.close()
+
+    try:
+        funding_data = hl.fetch_user_funding(wallet)
+        _cache_funding(wallet, funding_data)
+    except Exception as e:
+        print(f"[TRADES] Error refreshing funding: {e}")
+        return jsonify({"error": f"Failed to fetch funding: {e}"}), 502
+
+    return jsonify({"status": "ok", "count": len(funding_data)})
 
 
 @trades_bp.route("/api/candles")
@@ -158,5 +348,10 @@ def get_candles():
     interval = request.args.get("interval", "5m")
     start_time = int(request.args.get("start", 0))
     end_time = int(request.args.get("end", int(time.time() * 1000)))
-    candles = hl.fetch_candles(coin, interval, start_time, end_time)
+    try:
+        candles = hl.fetch_candles(coin, interval, start_time, end_time)
+    except Exception as e:
+        print(f"[TRADES] Error fetching candles: {e}")
+        return jsonify({"error": f"Failed to fetch candle data: {e}"}), 502
+
     return jsonify(candles if isinstance(candles, list) else [])

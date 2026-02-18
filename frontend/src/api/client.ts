@@ -1,10 +1,19 @@
-import type { Trade, TradeNote, TradeTag, Screenshot, WeekNotes } from '../types';
+import type { Trade, TradeNote, TradeTag, Screenshot, WeekNotes, PnlSummary } from '../types';
 
 const BASE = '/api';
 
 async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    let message = `API error: ${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.error) message = body.error;
+    } catch {
+      // response wasn't JSON, use default message
+    }
+    throw new Error(message);
+  }
   return res.json();
 }
 
@@ -59,6 +68,11 @@ export async function removeTradeTag(tradeId: number, tag: string): Promise<void
 export async function getAllTags(): Promise<string[]> {
   const data = await fetchJSON<{ tags: string[] }>(`${BASE}/tags`);
   return data.tags;
+}
+
+export async function getTradeTagsMap(wallet?: string): Promise<Record<string, string[]>> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<Record<string, string[]>>(`${BASE}/trade-tags${params}`);
 }
 
 // ── Screenshots ──
@@ -117,6 +131,25 @@ export async function saveWeekNote(weekKey: string, notes: WeekNotes): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(notes),
   });
+}
+
+// ── PnL Summary ──
+
+export async function getPnlSummary(wallet?: string): Promise<PnlSummary> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<PnlSummary>(`${BASE}/pnl-summary${params}`);
+}
+
+// ── Funding ──
+
+export async function getDailyFunding(wallet?: string): Promise<Record<string, number>> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<Record<string, number>>(`${BASE}/funding/daily${params}`);
+}
+
+export async function getTradeFunding(tradeId: number, wallet?: string): Promise<{ funding: number; count: number }> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<{ funding: number; count: number }>(`${BASE}/trades/${tradeId}/funding${params}`);
 }
 
 // ── Candles ──

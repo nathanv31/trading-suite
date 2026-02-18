@@ -93,6 +93,35 @@ def get_all_tags():
     return jsonify({"tags": [r["tag"] for r in rows]})
 
 
+@journal_bp.route("/api/trade-tags", methods=["GET"])
+def get_trade_tags_map():
+    """Get all tag mappings for a wallet's trades.
+
+    Returns a dict of trade_id -> [tag1, tag2, ...] for efficient
+    client-side tag filtering without N+1 queries.
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT tt.trade_id, tt.tag
+           FROM trade_tags tt
+           JOIN trades t ON t.id = tt.trade_id
+           WHERE t.wallet = ?
+           ORDER BY tt.trade_id""",
+        (wallet,),
+    ).fetchall()
+    conn.close()
+    result = {}
+    for row in rows:
+        tid = str(row["trade_id"])
+        if tid not in result:
+            result[tid] = []
+        result[tid].append(row["tag"])
+    return jsonify(result)
+
+
 # ── Screenshots ──
 
 @journal_bp.route("/api/trades/<int:trade_id>/screenshots", methods=["GET"])

@@ -1,5 +1,4 @@
 import type { Trade } from '../types';
-import { formatHold } from './formatters';
 
 export interface AnalyticsStats {
   netPnl: number;
@@ -30,16 +29,18 @@ export interface AnalyticsStats {
 }
 
 export function computeStats(trades: Trade[]): AnalyticsStats {
-  const wins = trades.filter(t => t.pnl > 0);
-  const losses = trades.filter(t => t.pnl < 0);
-  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+  // Use net PnL (pnl - fees) consistently for all metrics
+  const net = (t: Trade) => t.pnl - t.fees;
+  const wins = trades.filter(t => net(t) > 0);
+  const losses = trades.filter(t => net(t) < 0);
   const totalFees = trades.reduce((s, t) => s + t.fees, 0);
+  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
   const netPnl = totalPnl - totalFees;
   const winRate = trades.length ? (wins.length / trades.length) * 100 : 0;
-  const avgWin = wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
-  const avgLoss = losses.length ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
-  const totalWinPnl = wins.reduce((s, t) => s + t.pnl, 0);
-  const totalLossPnl = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
+  const avgWin = wins.length ? wins.reduce((s, t) => s + net(t), 0) / wins.length : 0;
+  const avgLoss = losses.length ? Math.abs(losses.reduce((s, t) => s + net(t), 0) / losses.length) : 0;
+  const totalWinPnl = wins.reduce((s, t) => s + net(t), 0);
+  const totalLossPnl = Math.abs(losses.reduce((s, t) => s + net(t), 0));
   const profitFactor = totalLossPnl > 0 ? totalWinPnl / totalLossPnl : 0;
   const avgRR = avgLoss > 0 ? avgWin / avgLoss : 0;
   const expectancy = (winRate / 100) * avgWin - (1 - winRate / 100) * avgLoss;
@@ -48,7 +49,7 @@ export function computeStats(trades: Trade[]): AnalyticsStats {
   const dailyMap: Record<string, number> = {};
   trades.forEach(t => {
     const k = new Date(t.open_time).toISOString().slice(0, 10);
-    dailyMap[k] = (dailyMap[k] || 0) + t.pnl;
+    dailyMap[k] = (dailyMap[k] || 0) + t.pnl - t.fees;
   });
   const dailyRets = Object.values(dailyMap);
   const meanRet = dailyRets.length ? dailyRets.reduce((s, v) => s + v, 0) / dailyRets.length : 0;
@@ -75,13 +76,13 @@ export function computeStats(trades: Trade[]): AnalyticsStats {
   // Long/Short
   const longCount = trades.filter(t => t.side === 'B').length;
   const shortCount = trades.filter(t => t.side === 'A').length;
-  const longPnl = trades.filter(t => t.side === 'B').reduce((s, t) => s + t.pnl, 0);
-  const shortPnl = trades.filter(t => t.side === 'A').reduce((s, t) => s + t.pnl, 0);
+  const longPnl = trades.filter(t => t.side === 'B').reduce((s, t) => s + net(t), 0);
+  const shortPnl = trades.filter(t => t.side === 'A').reduce((s, t) => s + net(t), 0);
 
   // Streaks
   let lws = 0, lls = 0, cw = 0, cl = 0;
   sorted.forEach(t => {
-    if (t.pnl > 0) { cw++; cl = 0; if (cw > lws) lws = cw; }
+    if (net(t) > 0) { cw++; cl = 0; if (cw > lws) lws = cw; }
     else { cl++; cw = 0; if (cl > lls) lls = cl; }
   });
 
@@ -95,8 +96,8 @@ export function computeStats(trades: Trade[]): AnalyticsStats {
     netPnl, realizedPnl: totalPnl, totalFees, winRate, wins: wins.length, losses: losses.length,
     avgWin, avgLoss, profitFactor, avgRR, expectancy, sharpe, sortino, maxDrawdown: maxDD,
     avgHoldMs, longCount, shortCount, longPnl, shortPnl,
-    bestTrade: wins.length ? Math.max(...wins.map(t => t.pnl)) : 0,
-    worstTrade: losses.length ? Math.min(...losses.map(t => t.pnl)) : 0,
+    bestTrade: wins.length ? Math.max(...wins.map(t => net(t))) : 0,
+    worstTrade: losses.length ? Math.min(...losses.map(t => net(t))) : 0,
     longestWinStreak: lws, longestLossStreak: lls, avgMAE, avgMFE,
   };
 }

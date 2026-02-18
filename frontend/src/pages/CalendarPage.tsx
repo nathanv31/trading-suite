@@ -1,14 +1,19 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTrades } from '../context/TradeContext';
 import { dateToKey, formatHold, formatPnl, MONTHS } from '../utils/formatters';
-import { getDayNote, saveDayNote, getWeekNote, saveWeekNote } from '../api/client';
+import { getDayNote, saveDayNote, getWeekNote, saveWeekNote, getDailyFunding } from '../api/client';
+import { useWallet } from '../context/WalletContext';
 import type { Trade, WeekNotes } from '../types';
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
 export default function CalendarPage() {
-  const { trades, loading } = useTrades();
+  const navigate = useNavigate();
+  const { trades, loading, error, refreshTrades } = useTrades();
+  const { wallet } = useWallet();
   const now = new Date();
   const [calYear, setCalYear] = useState(now.getFullYear());
   const [calMonth, setCalMonth] = useState(now.getMonth());
@@ -16,19 +21,38 @@ export default function CalendarPage() {
   const [selectedWeekKey, setSelectedWeekKey] = useState<string | null>(null);
   const [dayNote, setDayNote] = useState('');
   const [weekNotes, setWeekNotes] = useState<WeekNotes>({ review: '', well: '', improve: '' });
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [dailyFunding, setDailyFunding] = useState<Record<string, number>>({});
 
-  // Build day map: YYYY-MM-DD -> { trades, pnl }
+  // Fetch daily funding data
+  useEffect(() => {
+    if (wallet && trades.length > 0) {
+      getDailyFunding(wallet).then(setDailyFunding).catch(() => {});
+    }
+  }, [wallet, trades]);
+
+  // Build day map: YYYY-MM-DD -> { trades, tradePnl, funding, pnl }
+  // Allocate each trade to the date it was fully closed (fall back to open_time if still open)
   const dayMap = useMemo(() => {
-    const map: Record<string, { trades: Trade[]; pnl: number }> = {};
+    const map: Record<string, { trades: Trade[]; tradePnl: number; funding: number; pnl: number }> = {};
     trades.forEach(t => {
-      const d = new Date(t.open_time);
+      const d = new Date(t.close_time ?? t.open_time);
       const key = dateToKey(d);
-      if (!map[key]) map[key] = { trades: [], pnl: 0 };
+      if (!map[key]) map[key] = { trades: [], tradePnl: 0, funding: 0, pnl: 0 };
       map[key].trades.push(t);
-      map[key].pnl += t.pnl;
+      map[key].tradePnl += t.pnl - t.fees;
     });
+    // Merge funding into existing days and create entries for funding-only days
+    for (const [dateKey, amount] of Object.entries(dailyFunding)) {
+      if (!map[dateKey]) map[dateKey] = { trades: [], tradePnl: 0, funding: 0, pnl: 0 };
+      map[dateKey].funding = amount;
+    }
+    // Compute total pnl = tradePnl + funding
+    for (const data of Object.values(map)) {
+      data.pnl = data.tradePnl + data.funding;
+    }
     return map;
-  }, [trades]);
+  }, [trades, dailyFunding]);
 
   // Build calendar cells
   const calendarWeeks = useMemo(() => {
@@ -36,7 +60,6 @@ export default function CalendarPage() {
     const leading = firstDay === 0 ? 6 : firstDay - 1;
     const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
     const prevDays = new Date(calYear, calMonth, 0).getDate();
-    const today = new Date(); today.setHours(0,0,0,0);
 
     type Cell = { day: number; otherMonth: boolean; date: Date | null };
     const cells: Cell[] = [];
@@ -53,14 +76,12 @@ export default function CalendarPage() {
     return weeks;
   }, [calYear, calMonth]);
 
-  // Load day note when selecting
   useEffect(() => {
     if (selectedDayKey) {
       getDayNote(selectedDayKey).then(setDayNote).catch(() => setDayNote(''));
     }
   }, [selectedDayKey]);
 
-  // Load week notes when selecting
   useEffect(() => {
     if (selectedWeekKey) {
       getWeekNote(selectedWeekKey).then(setWeekNotes).catch(() => setWeekNotes({ review: '', well: '', improve: '' }));
@@ -86,6 +107,11 @@ export default function CalendarPage() {
     setCalMonth(m); setCalYear(y);
   }
 
+  function goToday() {
+    setCalYear(now.getFullYear());
+    setCalMonth(now.getMonth());
+  }
+
   function openDay(key: string) {
     setSelectedDayKey(key);
     setSelectedWeekKey(null);
@@ -102,7 +128,6 @@ export default function CalendarPage() {
   const selectedDayData = selectedDayKey ? dayMap[selectedDayKey] : null;
   const selectedDate = selectedDayKey ? new Date(selectedDayKey + 'T00:00:00') : null;
 
-  // Week data for selected week
   const selectedWeekData = useMemo(() => {
     if (!selectedWeekKey) return null;
     const week = calendarWeeks.find(w => {
@@ -111,76 +136,114 @@ export default function CalendarPage() {
     });
     if (!week) return null;
     const weekTrades: Trade[] = [];
+    let weekFunding = 0;
     week.forEach(c => {
       if (!c.date) return;
       const data = dayMap[dateToKey(c.date)];
-      if (data) weekTrades.push(...data.trades);
+      if (data) {
+        weekTrades.push(...data.trades);
+        weekFunding += data.funding;
+      }
     });
-    const pnl = weekTrades.reduce((s, t) => s + t.pnl, 0);
-    const wins = weekTrades.filter(t => t.pnl > 0);
-    const losses = weekTrades.filter(t => t.pnl < 0);
+    const tradePnl = weekTrades.reduce((s, t) => s + t.pnl - t.fees, 0);
+    const pnl = tradePnl + weekFunding;
+    const wins = weekTrades.filter(t => (t.pnl - t.fees) > 0);
+    const losses = weekTrades.filter(t => (t.pnl - t.fees) < 0);
     const winRate = weekTrades.length ? (wins.length / weekTrades.length * 100).toFixed(0) : '0';
     const fees = weekTrades.reduce((s, t) => s + t.fees, 0);
-    const avgWin = wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
-    const avgLoss = losses.length ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
+    const avgWin = wins.length ? wins.reduce((s, t) => s + (t.pnl - t.fees), 0) / wins.length : 0;
+    const avgLoss = losses.length ? Math.abs(losses.reduce((s, t) => s + (t.pnl - t.fees), 0) / losses.length) : 0;
     const rr = avgLoss > 0 ? (avgWin / avgLoss).toFixed(2) : wins.length > 0 ? '\u221e' : '\u2014';
-    return { week, trades: weekTrades, pnl, wins: wins.length, losses: losses.length, winRate, fees, rr };
+    return { week, trades: weekTrades, pnl, tradePnl, funding: weekFunding, wins: wins.length, losses: losses.length, winRate, fees, rr };
   }, [selectedWeekKey, calendarWeeks, dayMap]);
 
   if (loading) {
     return <div className="flex items-center justify-center" style={{ height: 200 }}><div className="spinner" /></div>;
   }
 
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="metric-card" style={{ padding: 32, textAlign: 'center' }}>
+          <div className="loss-text mb-2" style={{ fontSize: 14 }}>Failed to load trades</div>
+          <div className="secondary-text mb-4" style={{ fontSize: 13 }}>{error}</div>
+          <button className="btn-primary" onClick={refreshTrades} disabled={loading}>
+            {loading ? 'Retrying...' : 'Retry'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const today = new Date(); today.setHours(0,0,0,0);
+
+  // Year range for selector
+  const years = [];
+  for (let y = 2022; y <= now.getFullYear() + 1; y++) years.push(y);
 
   return (
     <div className="p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-4">
-          <button onClick={() => shiftMonth(-1)} className="page-btn" style={{ fontSize: 16, padding: '6px 14px' }}>&lsaquo;</button>
-          <h2 className="text-xl font-bold" style={{ minWidth: 160, textAlign: 'center' }}>{MONTH_NAMES[calMonth]} {calYear}</h2>
-          <button onClick={() => shiftMonth(1)} className="page-btn" style={{ fontSize: 16, padding: '6px 14px' }}>&rsaquo;</button>
+      <div className="cal-header">
+        <div className="cal-header-left">
+          <button onClick={() => shiftMonth(-1)} className="cal-nav-btn">&lsaquo;</button>
+          <h2 className="cal-title">{MONTH_NAMES[calMonth]} {calYear}</h2>
+          <button onClick={() => shiftMonth(1)} className="cal-nav-btn">&rsaquo;</button>
         </div>
-        <div className="flex items-center gap-3">
-          <button onClick={() => { setCalYear(now.getFullYear()); setCalMonth(now.getMonth()); }} className="page-btn">Today</button>
+        <div className="cal-header-right">
+          <button onClick={goToday} className="page-btn">Today</button>
+          <select
+            className="filter-select"
+            value={calMonth}
+            onChange={e => setCalMonth(Number(e.target.value))}
+          >
+            {MONTH_SHORT.map((m, i) => <option key={i} value={i}>{m}</option>)}
+          </select>
+          <select
+            className="filter-select"
+            value={calYear}
+            onChange={e => setCalYear(Number(e.target.value))}
+          >
+            {years.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
         </div>
       </div>
 
-      <div className="flex gap-4" style={{ alignItems: 'flex-start' }}>
+      <div className="cal-layout">
         {/* Calendar Grid */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="cal-grid-container">
           {/* Day headers */}
-          <div style={{ display: 'grid', gridTemplateColumns: '32px repeat(7, 1fr)', gap: 4, marginBottom: 4 }}>
-            <div />
-            {DAY_NAMES.map(d => <div key={d} className="cal-header-cell">{d}</div>)}
+          <div className="cal-dow-row">
+            <div className="cal-week-gutter" />
+            {DAY_NAMES.map(d => <div key={d} className="cal-dow">{d}</div>)}
           </div>
 
           {/* Week rows */}
           {calendarWeeks.map((week, wi) => {
             const weekTrades: Trade[] = [];
-            week.forEach(c => { if (c.date) { const d = dayMap[dateToKey(c.date)]; if (d) weekTrades.push(...d.trades); }});
-            const weekPnl = weekTrades.reduce((s, t) => s + t.pnl, 0);
+            let weekFunding = 0;
+            week.forEach(c => { if (c.date) { const d = dayMap[dateToKey(c.date)]; if (d) { weekTrades.push(...d.trades); weekFunding += d.funding; } }});
+            const weekPnl = weekTrades.reduce((s, t) => s + t.pnl - t.fees, 0) + weekFunding;
             const hasWeekTrades = weekTrades.length > 0;
             const weekFirst = week.find(c => c.date)?.date;
             const weekKey = weekFirst ? dateToKey(weekFirst) : `w${wi}`;
 
             return (
               <div key={wi} className="cal-week-row">
-                {/* Week tab */}
+                {/* Week gutter tab */}
                 <div
-                  className={`cal-week-tab ${selectedWeekKey === weekKey ? 'active' : ''}`}
+                  className={`cal-week-gutter-tab ${selectedWeekKey === weekKey ? 'active' : ''}`}
                   onClick={() => openWeek(week)}
                 >
                   {hasWeekTrades ? (
-                    <>
-                      <div className="cal-week-tab-dot" style={{ width: 5, height: 5, borderRadius: '50%', background: weekPnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)' }} />
-                      <div style={{ fontSize: 9, fontWeight: 700, writingMode: 'vertical-rl', transform: 'rotate(180deg)', color: weekPnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)' }}>
-                        {weekPnl >= 0 ? '+' : '-'}${Math.abs(weekPnl).toFixed(0)}
+                    <div className="cal-week-gutter-content">
+                      <div className="cal-week-gutter-dot" style={{ background: weekPnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)' }} />
+                      <div className="cal-week-gutter-pnl" style={{ color: weekPnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)' }}>
+                        {formatPnl(weekPnl)}
                       </div>
-                    </>
+                    </div>
                   ) : (
-                    <div style={{ fontSize: 9, color: 'var(--text-secondary)', writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>&mdash;</div>
+                    <div className="cal-week-gutter-empty">&mdash;</div>
                   )}
                 </div>
 
@@ -189,7 +252,7 @@ export default function CalendarPage() {
                   if (c.otherMonth) {
                     return (
                       <div key={ci} className="cal-cell other-month">
-                        <div className="cal-day-num">{c.day}</div>
+                        <span className="cal-cell-day">{c.day}</span>
                       </div>
                     );
                   }
@@ -200,18 +263,24 @@ export default function CalendarPage() {
                   return (
                     <div
                       key={ci}
-                      className={`cal-cell${isToday ? ' today' : ''}${isActive ? ' active-day' : ''}`}
+                      className={`cal-cell${isActive ? ' active' : ''}`}
                       onClick={() => openDay(key)}
                     >
-                      <div className="cal-day-num">{c.day}</div>
-                      {data && (
-                        <>
-                          <div className={`cal-day-pnl ${data.pnl >= 0 ? 'profit' : 'loss'}`}>
-                            {data.pnl >= 0 ? '+' : ''}${Math.abs(data.pnl).toFixed(2)}
+                      <span className={`cal-cell-day${isToday ? ' today' : ''}`}>{c.day}</span>
+                      {data && (data.trades.length > 0 || data.funding !== 0) && (
+                        <div className="cal-cell-data">
+                          <div className={`cal-cell-pnl ${data.pnl >= 0 ? 'profit' : 'loss'}`}>
+                            {formatPnl(data.pnl)}
                           </div>
-                          <div className="cal-day-trades">{data.trades.length} trade{data.trades.length !== 1 ? 's' : ''}</div>
-                          <div className={`cal-cell-bar ${data.pnl >= 0 ? 'profit' : 'loss'}`} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, borderRadius: '0 0 7px 7px' }} />
-                        </>
+                          <div className="cal-cell-count">
+                            {data.trades.length > 0
+                              ? `${data.trades.length} trade${data.trades.length !== 1 ? 's' : ''}`
+                              : 'funding only'}
+                          </div>
+                        </div>
+                      )}
+                      {data && (data.trades.length > 0 || data.funding !== 0) && (
+                        <div className={`cal-cell-bar ${data.pnl >= 0 ? 'profit' : 'loss'}`} />
                       )}
                     </div>
                   );
@@ -223,94 +292,193 @@ export default function CalendarPage() {
 
         {/* Day Sidebar */}
         {selectedDayKey && selectedDate && (
-          <div className="cal-sidebar" style={{ width: 420, flexShrink: 0, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 10, padding: 20 }}>
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-sm">{selectedDate.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
-              <button className="toggle-btn" onClick={() => setSelectedDayKey(null)}>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+          <div className={`cal-sidebar${sidebarExpanded ? ' expanded' : ''}`}>
+            <div className="cal-sidebar-header">
+              <h3 className="cal-sidebar-title">
+                {selectedDate.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+              </h3>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button className="cal-sidebar-close" onClick={() => setSidebarExpanded(e => !e)} title={sidebarExpanded ? 'Collapse' : 'Expand'}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    {sidebarExpanded
+                      ? <><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="M14 10l7-7" /><path d="M3 21l7-7" /></>
+                      : <><path d="M15 3h6v6" /><path d="M9 21H3v-6" /><path d="M21 3l-7 7" /><path d="M3 21l7-7" /></>
+                    }
+                  </svg>
+                </button>
+                <button className="cal-sidebar-close" onClick={() => { setSelectedDayKey(null); setSidebarExpanded(false); }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
-            {/* Summary */}
-            {selectedDayData && selectedDayData.trades.length > 0 ? (
-              <div className={`cal-day-summary mb-4 ${selectedDayData.pnl >= 0 ? 'profit' : 'loss'}`}>
-                <div className="secondary-text text-xs mb-1">{selectedDayData.pnl >= 0 ? 'Total Win' : 'Total Loss'}</div>
-                <div className={`text-2xl font-bold ${selectedDayData.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>{formatPnl(selectedDayData.pnl)}</div>
-                <div className="secondary-text text-xs mt-1">{selectedDayData.trades.length} Trade{selectedDayData.trades.length !== 1 ? 's' : ''}</div>
+
+            {/* Summary card */}
+            {selectedDayData && (selectedDayData.trades.length > 0 || selectedDayData.funding !== 0) ? (
+              <div className={`cal-summary-card ${selectedDayData.pnl >= 0 ? 'profit' : 'loss'}`}>
+                <div className="cal-summary-label">{selectedDayData.pnl >= 0 ? 'Total Profit' : 'Total Loss'}</div>
+                <div className={`cal-summary-value ${selectedDayData.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>
+                  {formatPnl(selectedDayData.pnl)}
+                </div>
+                <div className="cal-summary-sub">{selectedDayData.trades.length} Trade{selectedDayData.trades.length !== 1 ? 's' : ''}</div>
+                {(selectedDayData.funding !== 0 || selectedDayData.trades.length > 0) && (
+                  <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.8, borderTop: '1px solid var(--border-color)', paddingTop: 6 }}>
+                    <div className="flex justify-between">
+                      <span className="secondary-text">Trading PnL</span>
+                      <span className={selectedDayData.tradePnl >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(selectedDayData.tradePnl)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="secondary-text">Funding</span>
+                      <span className={selectedDayData.funding >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(selectedDayData.funding)}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="cal-day-summary mb-4 flat"><div className="secondary-text text-xs">No trades this day</div></div>
+              <div className="cal-summary-card flat">
+                <div className="cal-summary-label">No trades this day</div>
+              </div>
             )}
+
             {/* Day Notes */}
-            <div className="secondary-text mb-2" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em' }}>Daily Notes</div>
-            <textarea className="note-area mb-4" placeholder="Add notes about your trading day..." value={dayNote} onChange={e => handleDayNoteChange(e.target.value)} style={{ minHeight: 200 }} />
+            <div className="cal-section-label">Daily Notes</div>
+            <textarea
+              className="note-area"
+              placeholder="Add notes about your trading day..."
+              value={dayNote}
+              onChange={e => handleDayNoteChange(e.target.value)}
+              style={{ minHeight: 180 }}
+            />
+
             {/* Trades list */}
-            <div className="secondary-text mb-2" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em' }}>Trades</div>
+            <div className="cal-section-label" style={{ marginTop: 16 }}>Trades</div>
             {selectedDayData?.trades.map(t => {
-              const isWin = t.pnl >= 0;
+              const isWin = (t.pnl - t.fees) >= 0;
               return (
-                <div key={t.id} className="cal-trade-row">
-                  <div className="cal-trade-bar" style={{ width: 3, height: 32, borderRadius: 2, background: isWin ? 'var(--profit-color)' : 'var(--loss-color)' }} />
+                <div key={t.id} className="cal-trade-item">
+                  <div className="cal-trade-bar" style={{ background: isWin ? 'var(--profit-color)' : 'var(--loss-color)' }} />
                   <div style={{ flex: 1 }}>
                     <div className="font-bold" style={{ fontSize: 12 }}>{t.coin}</div>
-                    <div className="secondary-text" style={{ fontSize: 10 }}>{t.side === 'B' ? '\u2197 Long' : '\u2198 Short'} &middot; {formatHold(t.hold_ms)}</div>
+                    <div className="secondary-text" style={{ fontSize: 10 }}>
+                      {t.side === 'B' ? '\u2197 Long' : '\u2198 Short'} &middot; {formatHold(t.hold_ms)}
+                    </div>
                   </div>
-                  <div className={`${isWin ? 'profit-text' : 'loss-text'} font-bold`} style={{ fontSize: 12 }}>{formatPnl(t.pnl)}</div>
+                  <div className={`${isWin ? 'profit-text' : 'loss-text'} font-bold`} style={{ fontSize: 12 }}>
+                    {formatPnl(t.pnl - t.fees)}
+                  </div>
                 </div>
               );
             })}
-            {(!selectedDayData || selectedDayData.trades.length === 0) && <div className="secondary-text text-xs">No trades</div>}
+            {(!selectedDayData || selectedDayData.trades.length === 0) && (
+              <div className="secondary-text text-xs" style={{ padding: '8px 0' }}>No trades</div>
+            )}
+
+            {/* View in Journal button */}
+            <button
+              className="cal-journal-btn"
+              style={{ marginTop: 16 }}
+              onClick={() => navigate(`/journal?from=${selectedDayKey}&to=${selectedDayKey}`)}
+            >
+              View Day in Journal
+            </button>
           </div>
         )}
 
         {/* Week Sidebar */}
         {selectedWeekData && selectedWeekKey && (
-          <div className="cal-sidebar" style={{ width: 420, flexShrink: 0, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 10, padding: 20 }}>
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-sm accent-text">
-                Week of {(() => { const cells = selectedWeekData.week.filter(c => c.date); const f = cells[0]?.date; const l = cells[cells.length-1]?.date; return f && l ? `${f.getDate()} ${MONTHS[f.getMonth()]} \u2013 ${l.getDate()} ${MONTHS[l.getMonth()]}` : 'Weekly Review'; })()}
+          <div className={`cal-sidebar${sidebarExpanded ? ' expanded' : ''}`}>
+            <div className="cal-sidebar-header">
+              <h3 className="cal-sidebar-title accent-text">
+                Week of {(() => {
+                  const cells = selectedWeekData.week.filter(c => c.date);
+                  const f = cells[0]?.date;
+                  const l = cells[cells.length-1]?.date;
+                  return f && l ? `${f.getDate()} ${MONTHS[f.getMonth()]} \u2013 ${l.getDate()} ${MONTHS[l.getMonth()]}` : 'Weekly Review';
+                })()}
               </h3>
-              <button className="toggle-btn" onClick={() => setSelectedWeekKey(null)}>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            {/* Week Summary */}
-            <div className={`cal-day-summary mb-3 ${selectedWeekData.pnl >= 0 ? 'profit' : 'loss'}`}>
-              <div className="secondary-text text-xs mb-1">Week P&amp;L</div>
-              <div className={`text-2xl font-bold ${selectedWeekData.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>{formatPnl(selectedWeekData.pnl)}</div>
-              <div className="secondary-text text-xs mt-1">{selectedWeekData.trades.length} trades &middot; {selectedWeekData.wins}W / {selectedWeekData.losses}L</div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
-              <div className="detail-card" style={{ padding: 10, textAlign: 'center' }}>
-                <div className="secondary-text" style={{ fontSize: 9, textTransform: 'uppercase', marginBottom: 4 }}>Win Rate</div>
-                <div className={`font-bold text-sm ${parseInt(selectedWeekData.winRate) >= 50 ? 'profit-text' : 'loss-text'}`}>{selectedWeekData.winRate}%</div>
-              </div>
-              <div className="detail-card" style={{ padding: 10, textAlign: 'center' }}>
-                <div className="secondary-text" style={{ fontSize: 9, textTransform: 'uppercase', marginBottom: 4 }}>Avg R:R</div>
-                <div className="font-bold text-sm accent-text">{selectedWeekData.rr}</div>
-              </div>
-              <div className="detail-card" style={{ padding: 10, textAlign: 'center' }}>
-                <div className="secondary-text" style={{ fontSize: 9, textTransform: 'uppercase', marginBottom: 4 }}>Fees</div>
-                <div className="font-bold text-sm loss-text">-${selectedWeekData.fees.toFixed(2)}</div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button className="cal-sidebar-close" onClick={() => setSidebarExpanded(e => !e)} title={sidebarExpanded ? 'Collapse' : 'Expand'}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    {sidebarExpanded
+                      ? <><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="M14 10l7-7" /><path d="M3 21l7-7" /></>
+                      : <><path d="M15 3h6v6" /><path d="M9 21H3v-6" /><path d="M21 3l-7 7" /><path d="M3 21l7-7" /></>
+                    }
+                  </svg>
+                </button>
+                <button className="cal-sidebar-close" onClick={() => { setSelectedWeekKey(null); setSidebarExpanded(false); }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
             </div>
+
+            {/* Week P&L Summary */}
+            <div className={`cal-summary-card ${selectedWeekData.pnl >= 0 ? 'profit' : 'loss'}`}>
+              <div className="cal-summary-label">Week P&amp;L</div>
+              <div className={`cal-summary-value ${selectedWeekData.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>
+                {formatPnl(selectedWeekData.pnl)}
+              </div>
+              <div className="cal-summary-sub">
+                {selectedWeekData.trades.length} trades &middot; {selectedWeekData.wins}W / {selectedWeekData.losses}L
+              </div>
+              {selectedWeekData.funding !== 0 && (
+                <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.8, borderTop: '1px solid var(--border-color)', paddingTop: 6 }}>
+                  <div className="flex justify-between">
+                    <span className="secondary-text">Trading PnL</span>
+                    <span className={selectedWeekData.tradePnl >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(selectedWeekData.tradePnl)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="secondary-text">Funding</span>
+                    <span className={selectedWeekData.funding >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(selectedWeekData.funding)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Stats row */}
+            <div className="cal-stats-row">
+              <div className="cal-stat-card">
+                <div className="cal-stat-label">Win Rate</div>
+                <div className={`cal-stat-value ${parseInt(selectedWeekData.winRate) >= 50 ? 'profit-text' : 'loss-text'}`}>
+                  {selectedWeekData.winRate}%
+                </div>
+              </div>
+              <div className="cal-stat-card">
+                <div className="cal-stat-label">Avg R:R</div>
+                <div className="cal-stat-value accent-text">{selectedWeekData.rr}</div>
+              </div>
+              <div className="cal-stat-card">
+                <div className="cal-stat-label">Fees</div>
+                <div className="cal-stat-value loss-text">-${selectedWeekData.fees.toFixed(2)}</div>
+              </div>
+            </div>
+
             {/* Day Breakdown */}
-            <div className="secondary-text mb-2" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em' }}>Day Breakdown</div>
+            <div className="cal-section-label">Day Breakdown</div>
             {selectedWeekData.week.map((c, i) => {
               if (!c.date) return null;
               const key = dateToKey(c.date);
               const data = dayMap[key];
               const pnl = data ? data.pnl : null;
               const cnt = data ? data.trades.length : 0;
+              const hasActivity = cnt > 0 || (data && data.funding !== 0);
               return (
-                <div key={i} className="cal-trade-row" style={{ cursor: cnt > 0 ? 'pointer' : 'default' }} onClick={() => cnt > 0 && openDay(key)}>
-                  <div className="cal-trade-bar" style={{ width: 3, height: 32, borderRadius: 2, background: pnl === null ? 'var(--border-color)' : pnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)' }} />
+                <div
+                  key={i}
+                  className="cal-trade-item"
+                  style={{ cursor: hasActivity ? 'pointer' : 'default' }}
+                  onClick={() => hasActivity && openDay(key)}
+                >
+                  <div className="cal-trade-bar" style={{
+                    background: pnl === null ? 'var(--border-color)' : pnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)'
+                  }} />
                   <div style={{ flex: 1 }}>
                     <div className="font-bold" style={{ fontSize: 12 }}>{DAY_NAMES[i]} {c.day}</div>
-                    <div className="secondary-text" style={{ fontSize: 10 }}>{cnt > 0 ? `${cnt} trade${cnt !== 1 ? 's' : ''}` : 'No trades'}</div>
+                    <div className="secondary-text" style={{ fontSize: 10 }}>
+                      {cnt > 0 ? `${cnt} trade${cnt !== 1 ? 's' : ''}` : 'No trades'}
+                    </div>
                   </div>
                   <div className={`${pnl === null ? 'secondary-text' : pnl >= 0 ? 'profit-text' : 'loss-text'} font-bold`} style={{ fontSize: 12 }}>
                     {pnl === null ? '\u2014' : formatPnl(pnl)}
@@ -318,19 +486,56 @@ export default function CalendarPage() {
                 </div>
               );
             })}
-            {/* Weekly Review Notes */}
-            <div className="secondary-text mb-2 mt-4" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em' }}>Weekly Review</div>
-            <textarea className="note-area mb-3" placeholder="Weekly review \u2014 what went well, what to improve..." value={weekNotes.review} onChange={e => handleWeekNoteChange('review', e.target.value)} style={{ minHeight: 150 }} />
-            <div className="detail-grid" style={{ marginTop: 0 }}>
-              <div className="detail-card">
-                <h4>What Went Well</h4>
-                <textarea className="note-area" placeholder="Wins, good decisions..." value={weekNotes.well} onChange={e => handleWeekNoteChange('well', e.target.value)} style={{ minHeight: 80, border: 'none', padding: 0, background: 'transparent' }} />
+
+            {/* Weekly Review */}
+            <div className="cal-section-label" style={{ marginTop: 16 }}>Weekly Review</div>
+            <textarea
+              className="note-area"
+              placeholder="Weekly review — what went well, what to improve..."
+              value={weekNotes.review}
+              onChange={e => handleWeekNoteChange('review', e.target.value)}
+              style={{ minHeight: 120 }}
+            />
+
+            <div className="cal-notes-grid">
+              <div className="cal-notes-card">
+                <div className="cal-notes-card-title profit-text">What Went Well</div>
+                <textarea
+                  className="note-area"
+                  placeholder="Wins, good decisions..."
+                  value={weekNotes.well}
+                  onChange={e => handleWeekNoteChange('well', e.target.value)}
+                  style={{ minHeight: 70, border: 'none', padding: 0, background: 'transparent' }}
+                />
               </div>
-              <div className="detail-card">
-                <h4>What to Improve</h4>
-                <textarea className="note-area" placeholder="Mistakes, patterns to break..." value={weekNotes.improve} onChange={e => handleWeekNoteChange('improve', e.target.value)} style={{ minHeight: 80, border: 'none', padding: 0, background: 'transparent' }} />
+              <div className="cal-notes-card">
+                <div className="cal-notes-card-title loss-text">What to Improve</div>
+                <textarea
+                  className="note-area"
+                  placeholder="Mistakes, patterns to break..."
+                  value={weekNotes.improve}
+                  onChange={e => handleWeekNoteChange('improve', e.target.value)}
+                  style={{ minHeight: 70, border: 'none', padding: 0, background: 'transparent' }}
+                />
               </div>
             </div>
+
+            {/* View in Journal button */}
+            <button
+              className="cal-journal-btn"
+              onClick={() => {
+                const cells = selectedWeekData.week.filter(c => c.date);
+                const first = cells[0]?.date;
+                const last = cells[cells.length - 1]?.date;
+                if (first && last) {
+                  navigate(`/journal?from=${dateToKey(first)}&to=${dateToKey(last)}`);
+                } else {
+                  navigate('/journal');
+                }
+              }}
+            >
+              View Week in Journal
+            </button>
           </div>
         )}
       </div>

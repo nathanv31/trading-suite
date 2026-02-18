@@ -79,6 +79,41 @@ class HyperliquidClient:
 
         return all_fills
 
+    def fetch_user_funding(self, wallet, start_time=1667260800000):
+        """Fetch all funding payment history for a wallet.
+
+        Args:
+            wallet: Ethereum address
+            start_time: Start timestamp in ms, defaults to HL launch
+
+        Returns:
+            List of funding payment dicts
+        """
+        all_funding = []
+        current_start = start_time
+
+        while True:
+            payload = {
+                "type": "userFunding",
+                "user": wallet,
+                "startTime": current_start,
+            }
+            result = self._post(payload)
+            if not isinstance(result, list) or not result:
+                break
+
+            all_funding.extend(result)
+            print(f"[HL] Fetched {len(result)} funding entries (total: {len(all_funding)})")
+
+            if len(result) < HL_FILLS_PER_PAGE:
+                break
+
+            last_time = max(f["time"] for f in result)
+            current_start = last_time + 1
+            time.sleep(0.5)
+
+        return all_funding
+
     def fetch_user_state(self, wallet):
         """Get current positions and account state."""
         payload = {

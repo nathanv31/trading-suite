@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import type { Trade } from '../types';
-import { getTrades, refreshTrades as apiRefresh } from '../api/client';
+import { getTrades, refreshTrades as apiRefresh, getTradeTagsMap, getAllTags } from '../api/client';
 import { useWallet } from './WalletContext';
 
 interface TradeContextValue {
@@ -8,6 +8,9 @@ interface TradeContextValue {
   loading: boolean;
   error: string | null;
   refreshTrades: () => Promise<void>;
+  tagMap: Record<string, string[]>;
+  allTags: string[];
+  reloadTags: () => Promise<void>;
 }
 
 const TradeContext = createContext<TradeContextValue>({
@@ -15,6 +18,9 @@ const TradeContext = createContext<TradeContextValue>({
   loading: true,
   error: null,
   refreshTrades: async () => {},
+  tagMap: {},
+  allTags: [],
+  reloadTags: async () => {},
 });
 
 export function TradeProvider({ children }: { children: ReactNode }) {
@@ -22,6 +28,22 @@ export function TradeProvider({ children }: { children: ReactNode }) {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tagMap, setTagMap] = useState<Record<string, string[]>>({});
+  const [allTags, setAllTags] = useState<string[]>([]);
+
+  const loadTags = useCallback(async () => {
+    if (!wallet) return;
+    try {
+      const [map, tags] = await Promise.all([
+        getTradeTagsMap(wallet),
+        getAllTags(),
+      ]);
+      setTagMap(map);
+      setAllTags(tags);
+    } catch {
+      // Non-critical, don't block trades loading
+    }
+  }, [wallet]);
 
   const loadTrades = useCallback(async () => {
     if (!wallet) return;
@@ -55,8 +77,15 @@ export function TradeProvider({ children }: { children: ReactNode }) {
     loadTrades();
   }, [loadTrades]);
 
+  // Load tags after trades are loaded
+  useEffect(() => {
+    if (trades.length > 0) {
+      loadTags();
+    }
+  }, [trades, loadTags]);
+
   return (
-    <TradeContext.Provider value={{ trades, loading, error, refreshTrades: refresh }}>
+    <TradeContext.Provider value={{ trades, loading, error, refreshTrades: refresh, tagMap, allTags, reloadTags: loadTags }}>
       {children}
     </TradeContext.Provider>
   );

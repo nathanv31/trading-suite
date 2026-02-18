@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement,
   BarElement, ArcElement, TimeScale, Filler, Tooltip, Legend,
@@ -6,9 +6,14 @@ import {
 import 'chartjs-adapter-luxon';
 import { Line, Bar, Doughnut, Scatter } from 'react-chartjs-2';
 import { useTrades } from '../context/TradeContext';
+import { useWallet } from '../context/WalletContext';
 import { computeStats } from '../utils/tradeStats';
-import { formatHold, formatCurrency } from '../utils/formatters';
-import type { Trade } from '../types';
+import { formatHold, formatCurrency, formatPnl } from '../utils/formatters';
+import { getPnlSummary } from '../api/client';
+import TagFilter from '../components/TagFilter';
+import DateFilter from '../components/DateFilter';
+import type { PnlSummary } from '../types';
+
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, TimeScale, Filler, Tooltip, Legend);
 
@@ -18,21 +23,66 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 export default function AnalyticsPage() {
-  const { trades, loading } = useTrades();
+  const { trades, loading, error, refreshTrades, tagMap, allTags } = useTrades();
+  const { wallet } = useWallet();
   const [sideFilter, setSideFilter] = useState('');
   const [resultFilter, setResultFilter] = useState('');
   const [coinFilter, setCoinFilter] = useState('');
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [tagLogic, setTagLogic] = useState<'any' | 'all'>('any');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [dateGroupBy, setDateGroupBy] = useState<'open' | 'close'>('open');
+  const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
+
+  const isUnfiltered = !sideFilter && !resultFilter && !coinFilter && selectedTags.size === 0 && !dateFrom && !dateTo;
+
+  useEffect(() => {
+    if (wallet && trades.length > 0) {
+      getPnlSummary(wallet).then(setPnlSummary).catch(() => {});
+    }
+  }, [wallet, trades]);
 
   const coins = useMemo(() => [...new Set(trades.map(t => t.coin))].sort(), [trades]);
 
   const filtered = useMemo(() => {
     let list = [...trades];
+
+    // Date range filter
+    if (dateFrom) {
+      const fromTs = new Date(dateFrom + 'T00:00:00').getTime();
+      list = list.filter(t => {
+        const ts = dateGroupBy === 'close' && t.close_time ? t.close_time : t.open_time;
+        return ts >= fromTs;
+      });
+    }
+    if (dateTo) {
+      const toTs = new Date(dateTo + 'T23:59:59.999').getTime();
+      list = list.filter(t => {
+        const ts = dateGroupBy === 'close' && t.close_time ? t.close_time : t.open_time;
+        return ts <= toTs;
+      });
+    }
+
     if (sideFilter) list = list.filter(t => t.side === sideFilter);
-    if (resultFilter === 'win') list = list.filter(t => t.pnl > 0);
-    if (resultFilter === 'loss') list = list.filter(t => t.pnl < 0);
+    if (resultFilter === 'win') list = list.filter(t => (t.pnl - t.fees) > 0);
+    if (resultFilter === 'loss') list = list.filter(t => (t.pnl - t.fees) < 0);
     if (coinFilter) list = list.filter(t => t.coin === coinFilter);
+
+    // Tag filter
+    if (selectedTags.size > 0) {
+      list = list.filter(t => {
+        const tradeTags = tagMap[String(t.id)] || [];
+        if (tagLogic === 'any') {
+          return tradeTags.some(tag => selectedTags.has(tag));
+        } else {
+          return [...selectedTags].every(tag => tradeTags.includes(tag));
+        }
+      });
+    }
+
     return list;
-  }, [trades, sideFilter, resultFilter, coinFilter]);
+  }, [trades, sideFilter, resultFilter, coinFilter, selectedTags, tagLogic, tagMap, dateFrom, dateTo, dateGroupBy]);
 
   const stats = useMemo(() => filtered.length > 0 ? computeStats(filtered) : null, [filtered]);
 
@@ -54,7 +104,7 @@ export default function AnalyticsPage() {
   // Day of week
   const dowData = useMemo(() => {
     const pnl = [0, 0, 0, 0, 0, 0, 0];
-    filtered.forEach(t => pnl[new Date(t.open_time).getDay()] += t.pnl);
+    filtered.forEach(t => pnl[new Date(t.open_time).getDay()] += t.pnl - t.fees);
     return { labels: DOW_ORDER.map(i => DAYS[i]), data: DOW_ORDER.map(i => parseFloat(pnl[i].toFixed(2))) };
   }, [filtered]);
 
@@ -62,7 +112,7 @@ export default function AnalyticsPage() {
   const todData = useMemo(() => {
     const labels = ['00-04', '04-08', '08-12', '12-16', '16-20', '20-24'];
     const pnl = [0, 0, 0, 0, 0, 0];
-    filtered.forEach(t => { const h = new Date(t.open_time).getHours(); pnl[Math.floor(h / 4)] += t.pnl; });
+    filtered.forEach(t => { const h = new Date(t.open_time).getHours(); pnl[Math.floor(h / 4)] += t.pnl - t.fees; });
     return { labels, data: pnl.map(v => parseFloat(v.toFixed(2))) };
   }, [filtered]);
 
@@ -71,12 +121,13 @@ export default function AnalyticsPage() {
     const buckets: Record<string, number> = { '<1m': 0, '1-5m': 0, '5-30m': 0, '30m-4h': 0, '4h-1d': 0, '>1d': 0 };
     filtered.forEach(t => {
       const m = (t.hold_ms || 0) / 60000;
-      if (m < 1) buckets['<1m'] += t.pnl;
-      else if (m < 5) buckets['1-5m'] += t.pnl;
-      else if (m < 30) buckets['5-30m'] += t.pnl;
-      else if (m < 240) buckets['30m-4h'] += t.pnl;
-      else if (m < 1440) buckets['4h-1d'] += t.pnl;
-      else buckets['>1d'] += t.pnl;
+      const net = t.pnl - t.fees;
+      if (m < 1) buckets['<1m'] += net;
+      else if (m < 5) buckets['1-5m'] += net;
+      else if (m < 30) buckets['5-30m'] += net;
+      else if (m < 240) buckets['30m-4h'] += net;
+      else if (m < 1440) buckets['4h-1d'] += net;
+      else buckets['>1d'] += net;
     });
     return { labels: Object.keys(buckets), data: Object.values(buckets).map(v => parseFloat(v.toFixed(2))) };
   }, [filtered]);
@@ -84,7 +135,7 @@ export default function AnalyticsPage() {
   // Coin PnL
   const coinData = useMemo(() => {
     const map: Record<string, number> = {};
-    filtered.forEach(t => { map[t.coin] = (map[t.coin] || 0) + t.pnl; });
+    filtered.forEach(t => { map[t.coin] = (map[t.coin] || 0) + t.pnl - t.fees; });
     const entries = Object.entries(map).sort((a, b) => b[1] - a[1]);
     return { labels: entries.map(e => e[0]), data: entries.map(e => parseFloat(e[1].toFixed(2))) };
   }, [filtered]);
@@ -93,17 +144,33 @@ export default function AnalyticsPage() {
   const streakData = useMemo(() => {
     let sk = 0;
     return sorted.map((t, i) => {
+      const n = t.pnl - t.fees;
       const prev = i > 0 ? sorted[i - 1] : null;
-      if (!prev) sk = t.pnl > 0 ? 1 : -1;
-      else if (t.pnl > 0 && prev.pnl > 0) sk = sk > 0 ? sk + 1 : 1;
-      else if (t.pnl < 0 && prev.pnl < 0) sk = sk < 0 ? sk - 1 : -1;
-      else sk = t.pnl > 0 ? 1 : -1;
+      const pn = prev ? prev.pnl - prev.fees : 0;
+      if (!prev) sk = n > 0 ? 1 : -1;
+      else if (n > 0 && pn > 0) sk = sk > 0 ? sk + 1 : 1;
+      else if (n < 0 && pn < 0) sk = sk < 0 ? sk - 1 : -1;
+      else sk = n > 0 ? 1 : -1;
       return { x: new Date(t.open_time), y: sk };
     });
   }, [sorted]);
 
   if (loading) {
     return <div className="flex items-center justify-center" style={{ height: 200 }}><div className="spinner" /></div>;
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="metric-card" style={{ padding: 32, textAlign: 'center' }}>
+          <div className="loss-text mb-2" style={{ fontSize: 14 }}>Failed to load trades</div>
+          <div className="secondary-text mb-4" style={{ fontSize: 13 }}>{error}</div>
+          <button className="btn-primary" onClick={refreshTrades} disabled={loading}>
+            {loading ? 'Retrying...' : 'Retry'}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (!stats) {
@@ -119,8 +186,13 @@ export default function AnalyticsPage() {
     scales: { x: { grid: CHART_GRID, ticks: CHART_TICKS }, y: { grid: CHART_GRID, ticks: CHART_TICKS } },
   };
 
+  const displayNetPnl = (isUnfiltered && pnlSummary) ? pnlSummary.net_pnl : stats.netPnl;
+  const fundingSub = (isUnfiltered && pnlSummary?.total_funding !== null && pnlSummary?.total_funding !== undefined)
+    ? `Funding ${formatPnl(pnlSummary.total_funding)}`
+    : `Realized ${formatCurrency(stats.realizedPnl)}`;
+
   const statCards = [
-    { label: 'Net PnL', value: formatCurrency(stats.netPnl), cls: stats.netPnl >= 0 ? 'profit-text' : 'loss-text', sub: `Realized ${formatCurrency(stats.realizedPnl)}` },
+    { label: 'Net PnL', value: formatCurrency(displayNetPnl), cls: displayNetPnl >= 0 ? 'profit-text' : 'loss-text', sub: fundingSub },
     { label: 'Win Rate', value: `${stats.winRate.toFixed(1)}%`, cls: stats.winRate >= 50 ? 'profit-text' : 'loss-text', sub: `${stats.wins}W / ${stats.losses}L` },
     { label: 'Profit Factor', value: stats.profitFactor.toFixed(2), cls: stats.profitFactor >= 1 ? 'profit-text' : 'loss-text', sub: `W ${formatCurrency(stats.avgWin)} / L ${formatCurrency(stats.avgLoss)}` },
     { label: 'Avg R:R', value: stats.avgRR.toFixed(2), cls: stats.avgRR >= 1 ? 'profit-text' : 'loss-text', sub: `Sharpe ${stats.sharpe.toFixed(2)}` },
@@ -148,6 +220,26 @@ export default function AnalyticsPage() {
           <option value="">All Coins</option>
           {coins.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
+        <TagFilter
+          allTags={allTags}
+          selectedTags={selectedTags}
+          logic={tagLogic}
+          onTagsChange={setSelectedTags}
+          onLogicChange={setTagLogic}
+        />
+        <DateFilter
+          from={dateFrom}
+          to={dateTo}
+          onApply={(from, to, groupBy) => {
+            setDateGroupBy(groupBy);
+            setDateFrom(from);
+            setDateTo(to);
+          }}
+          onClear={() => {
+            setDateFrom('');
+            setDateTo('');
+          }}
+        />
         <div className="ml-auto secondary-text text-xs">{filtered.length} trades</div>
       </div>
 
@@ -232,7 +324,7 @@ export default function AnalyticsPage() {
           <div className="an-module-header"><span className="an-chart-title">P&L Distribution</span></div>
           <div style={{ height: 200 }}>
             {(() => {
-              const pnls = filtered.map(t => t.pnl);
+              const pnls = filtered.map(t => t.pnl - t.fees);
               const minP = Math.min(...pnls), maxP = Math.max(...pnls);
               const bc = 12, bs = (maxP - minP) / bc || 1;
               const db = Array(bc).fill(0);
@@ -259,8 +351,8 @@ export default function AnalyticsPage() {
           <div style={{ height: 200 }}>
             <Scatter data={{
               datasets: [
-                { label: 'Win', data: filtered.filter(t => t.pnl > 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(78,201,176,0.6)', pointRadius: 4 },
-                { label: 'Loss', data: filtered.filter(t => t.pnl < 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(244,135,113,0.6)', pointRadius: 4 },
+                { label: 'Win', data: filtered.filter(t => (t.pnl - t.fees) > 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(78,201,176,0.6)', pointRadius: 4 },
+                { label: 'Loss', data: filtered.filter(t => (t.pnl - t.fees) < 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(244,135,113,0.6)', pointRadius: 4 },
               ]
             }} options={{
               responsive: true, maintainAspectRatio: false,
@@ -278,7 +370,7 @@ export default function AnalyticsPage() {
           <div className="an-module-header"><span className="an-chart-title">Full Statistics</span></div>
           <div className="an-stats-table">
             {[
-              ['Net PnL', formatCurrency(stats.netPnl), 'Realized PnL', formatCurrency(stats.realizedPnl)],
+              ['Net PnL', formatCurrency(displayNetPnl), 'Realized PnL', formatCurrency(stats.realizedPnl)],
               ['Win Rate', `${stats.winRate.toFixed(2)}%`, 'Total Trades', String(filtered.length)],
               ['Avg Win', formatCurrency(stats.avgWin), 'Avg Loss', `-${formatCurrency(stats.avgLoss)}`],
               ['Best Trade', formatCurrency(stats.bestTrade), 'Worst Trade', formatCurrency(stats.worstTrade)],
