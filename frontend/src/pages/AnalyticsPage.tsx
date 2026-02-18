@@ -11,6 +11,7 @@ import { computeStats } from '../utils/tradeStats';
 import { formatHold, formatCurrency, formatPnl } from '../utils/formatters';
 import { getPnlSummary } from '../api/client';
 import TagFilter from '../components/TagFilter';
+import DateFilter from '../components/DateFilter';
 import type { PnlSummary } from '../types';
 
 
@@ -29,9 +30,12 @@ export default function AnalyticsPage() {
   const [coinFilter, setCoinFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [tagLogic, setTagLogic] = useState<'any' | 'all'>('any');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [dateGroupBy, setDateGroupBy] = useState<'open' | 'close'>('open');
   const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
 
-  const isUnfiltered = !sideFilter && !resultFilter && !coinFilter && selectedTags.size === 0;
+  const isUnfiltered = !sideFilter && !resultFilter && !coinFilter && selectedTags.size === 0 && !dateFrom && !dateTo;
 
   useEffect(() => {
     if (wallet && trades.length > 0) {
@@ -43,6 +47,23 @@ export default function AnalyticsPage() {
 
   const filtered = useMemo(() => {
     let list = [...trades];
+
+    // Date range filter
+    if (dateFrom) {
+      const fromTs = new Date(dateFrom + 'T00:00:00').getTime();
+      list = list.filter(t => {
+        const ts = dateGroupBy === 'close' && t.close_time ? t.close_time : t.open_time;
+        return ts >= fromTs;
+      });
+    }
+    if (dateTo) {
+      const toTs = new Date(dateTo + 'T23:59:59.999').getTime();
+      list = list.filter(t => {
+        const ts = dateGroupBy === 'close' && t.close_time ? t.close_time : t.open_time;
+        return ts <= toTs;
+      });
+    }
+
     if (sideFilter) list = list.filter(t => t.side === sideFilter);
     if (resultFilter === 'win') list = list.filter(t => (t.pnl - t.fees) > 0);
     if (resultFilter === 'loss') list = list.filter(t => (t.pnl - t.fees) < 0);
@@ -61,7 +82,7 @@ export default function AnalyticsPage() {
     }
 
     return list;
-  }, [trades, sideFilter, resultFilter, coinFilter, selectedTags, tagLogic, tagMap]);
+  }, [trades, sideFilter, resultFilter, coinFilter, selectedTags, tagLogic, tagMap, dateFrom, dateTo, dateGroupBy]);
 
   const stats = useMemo(() => filtered.length > 0 ? computeStats(filtered) : null, [filtered]);
 
@@ -205,6 +226,19 @@ export default function AnalyticsPage() {
           logic={tagLogic}
           onTagsChange={setSelectedTags}
           onLogicChange={setTagLogic}
+        />
+        <DateFilter
+          from={dateFrom}
+          to={dateTo}
+          onApply={(from, to, groupBy) => {
+            setDateGroupBy(groupBy);
+            setDateFrom(from);
+            setDateTo(to);
+          }}
+          onClear={() => {
+            setDateFrom('');
+            setDateTo('');
+          }}
         />
         <div className="ml-auto secondary-text text-xs">{filtered.length} trades</div>
       </div>
