@@ -140,6 +140,18 @@ export async function getPnlSummary(wallet?: string): Promise<PnlSummary> {
   return fetchJSON<PnlSummary>(`${BASE}/pnl-summary${params}`);
 }
 
+// ── Funding ──
+
+export async function getDailyFunding(wallet?: string): Promise<Record<string, number>> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<Record<string, number>>(`${BASE}/funding/daily${params}`);
+}
+
+export async function getTradeFunding(tradeId: number, wallet?: string): Promise<{ funding: number; count: number }> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<{ funding: number; count: number }>(`${BASE}/trades/${tradeId}/funding${params}`);
+}
+
 // ── Candles ──
 
 export async function getCandles(coin: string, interval: string, start: number, end: number): Promise<unknown[]> {

@@ -213,6 +213,134 @@ def get_pnl_summary():
     })
 
 
+def _cache_funding(wallet, funding_data):
+    """Store funding entries in SQLite, skipping duplicates."""
+    conn = get_db()
+    for f in funding_data:
+        try:
+            delta = f.get("delta", {})
+            conn.execute(
+                """INSERT OR IGNORE INTO funding (wallet, coin, usdc, time, hash)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    wallet,
+                    delta.get("coin", ""),
+                    float(delta.get("usdc", 0)),
+                    f["time"],
+                    f.get("hash", ""),
+                ),
+            )
+        except Exception as e:
+            print(f"[DB] Skipping funding entry: {e}")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_funding_cached(wallet):
+    """Fetch and cache funding if not already cached."""
+    conn = get_db()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM funding WHERE wallet = ?", (wallet,)
+    ).fetchone()[0]
+    conn.close()
+
+    if count == 0:
+        try:
+            funding_data = hl.fetch_user_funding(wallet)
+            _cache_funding(wallet, funding_data)
+        except Exception as e:
+            print(f"[TRADES] Error fetching funding: {e}")
+
+
+@trades_bp.route("/api/funding/daily")
+def get_daily_funding():
+    """Get funding payments grouped by day.
+
+    Returns { "YYYY-MM-DD": amount, ... } mapping each date
+    to the total funding received/paid that day.
+    """
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+
+    _ensure_funding_cached(wallet)
+
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT date(time / 1000, 'unixepoch') AS day, SUM(usdc) AS total
+           FROM funding WHERE wallet = ?
+           GROUP BY day ORDER BY day""",
+        (wallet,),
+    ).fetchall()
+    conn.close()
+
+    result = {row["day"]: round(row["total"], 6) for row in rows}
+    return jsonify(result)
+
+
+@trades_bp.route("/api/trades/<int:trade_id>/funding")
+def get_trade_funding(trade_id):
+    """Get funding payments attributed to a specific trade.
+
+    Matches funding entries by coin and time window (open_time to close_time).
+    """
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+
+    _ensure_funding_cached(wallet)
+
+    conn = get_db()
+    trade = conn.execute(
+        "SELECT coin, open_time, close_time FROM trades WHERE id = ? AND wallet = ?",
+        (trade_id, wallet),
+    ).fetchone()
+
+    if not trade:
+        conn.close()
+        return jsonify({"funding": 0, "count": 0})
+
+    coin = trade["coin"]
+    open_time = trade["open_time"]
+    close_time = trade["close_time"] or int(time.time() * 1000)
+
+    row = conn.execute(
+        """SELECT COALESCE(SUM(usdc), 0) AS total, COUNT(*) AS cnt
+           FROM funding
+           WHERE wallet = ? AND coin = ? AND time >= ? AND time <= ?""",
+        (wallet, coin, open_time, close_time),
+    ).fetchone()
+    conn.close()
+
+    return jsonify({
+        "funding": round(row["total"], 6) if row else 0,
+        "count": row["cnt"] if row else 0,
+    })
+
+
+@trades_bp.route("/api/funding/refresh", methods=["POST"])
+def refresh_funding():
+    """Force re-fetch funding data from Hyperliquid."""
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+
+    # Clear existing funding cache
+    conn = get_db()
+    conn.execute("DELETE FROM funding WHERE wallet = ?", (wallet,))
+    conn.commit()
+    conn.close()
+
+    try:
+        funding_data = hl.fetch_user_funding(wallet)
+        _cache_funding(wallet, funding_data)
+    except Exception as e:
+        print(f"[TRADES] Error refreshing funding: {e}")
+        return jsonify({"error": f"Failed to fetch funding: {e}"}), 502
+
+    return jsonify({"status": "ok", "count": len(funding_data)})
+
+
 @trades_bp.route("/api/candles")
 def get_candles():
     """Get candlestick data for a coin."""

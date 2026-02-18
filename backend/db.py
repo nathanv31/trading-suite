@@ -92,6 +92,19 @@ def init_db():
             improve TEXT DEFAULT '',
             updated_at INTEGER
         );
+
+        CREATE TABLE IF NOT EXISTS funding (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet TEXT NOT NULL,
+            coin TEXT NOT NULL,
+            usdc REAL NOT NULL,
+            time INTEGER NOT NULL,
+            hash TEXT NOT NULL,
+            UNIQUE(wallet, hash)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_funding_wallet_time ON funding(wallet, time);
+        CREATE INDEX IF NOT EXISTS idx_funding_wallet_coin_time ON funding(wallet, coin, time);
     """)
     conn.commit()
     conn.close()

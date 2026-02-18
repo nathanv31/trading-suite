@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Trade } from '../../types';
 import { formatHold, formatPrice, formatPnl, formatDateTime } from '../../utils/formatters';
-import { getTradeNotes, saveTradeNotes, getTradeTags, addTradeTag, removeTradeTag } from '../../api/client';
+import { getTradeNotes, saveTradeNotes, getTradeTags, addTradeTag, removeTradeTag, getTradeFunding } from '../../api/client';
 import { useTrades } from '../../context/TradeContext';
+import { useWallet } from '../../context/WalletContext';
 
 interface Props {
   trade: Trade;
@@ -10,9 +11,11 @@ interface Props {
 
 export default function JournalRow({ trade }: Props) {
   const { reloadTags, allTags } = useTrades();
+  const { wallet } = useWallet();
   const [expanded, setExpanded] = useState(false);
   const [notes, setNotes] = useState('');
   const [tags, setTags] = useState<string[]>([]);
+  const [funding, setFunding] = useState<number | null>(null);
   const [tagInput, setTagInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(0);
@@ -48,8 +51,9 @@ export default function JournalRow({ trade }: Props) {
     if (expanded) {
       getTradeNotes(trade.id).then(setNotes).catch(() => {});
       getTradeTags(trade.id).then(setTags).catch(() => {});
+      getTradeFunding(trade.id, wallet ?? undefined).then(r => setFunding(r.funding)).catch(() => setFunding(null));
     }
-  }, [expanded, trade.id]);
+  }, [expanded, trade.id, wallet]);
 
   function handleNotesChange(value: string) {
     setNotes(value);
@@ -143,24 +147,31 @@ export default function JournalRow({ trade }: Props) {
             {/* Stats */}
             <div className="detail-card">
               <h4>Trade Stats</h4>
-              {[
-                ['Entry Price', entryStr],
-                ['Exit Price', exitStr],
-                ['Size', `${trade.size.toFixed(4)} ${trade.coin}`],
-                ['Notional', `$${notional}`],
-                ['Hold Time', holdStr],
-                ['MAE', <span className="loss-text">{maePct}%{maePx && <span className="secondary-text" style={{ fontSize: 10, marginLeft: 4 }}>({maePx})</span>}</span>],
-                ['MFE', <span className="profit-text">{mfePct}%{mfePx && <span className="secondary-text" style={{ fontSize: 10, marginLeft: 4 }}>({mfePx})</span>}</span>],
-                ['Actual R:R', <span className={parseFloat(String(actualRR)) >= 1 ? 'profit-text' : 'loss-text'}>{actualRR}</span>],
-                ['Gross PnL', <span className={`${trade.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>{formatPnl(trade.pnl)}</span>],
-                ['Fees', <span className="loss-text">{fees}</span>],
-                ['Net PnL', <span className={`${(trade.pnl - trade.fees) >= 0 ? 'profit-text' : 'loss-text'} font-bold`}>{formatPnl(trade.pnl - trade.fees)}</span>],
-              ].map(([label, value], i) => (
-                <div key={i} className="stat-row">
-                  <span className="stat-label">{label}</span>
-                  <span>{value}</span>
-                </div>
-              ))}
+              {(() => {
+                const totalNet = trade.pnl - trade.fees + (funding ?? 0);
+                const rows: [string, React.ReactNode][] = [
+                  ['Entry Price', entryStr],
+                  ['Exit Price', exitStr],
+                  ['Size', `${trade.size.toFixed(4)} ${trade.coin}`],
+                  ['Notional', `$${notional}`],
+                  ['Hold Time', holdStr],
+                  ['MAE', <span className="loss-text">{maePct}%{maePx && <span className="secondary-text" style={{ fontSize: 10, marginLeft: 4 }}>({maePx})</span>}</span>],
+                  ['MFE', <span className="profit-text">{mfePct}%{mfePx && <span className="secondary-text" style={{ fontSize: 10, marginLeft: 4 }}>({mfePx})</span>}</span>],
+                  ['Actual R:R', <span className={parseFloat(String(actualRR)) >= 1 ? 'profit-text' : 'loss-text'}>{actualRR}</span>],
+                  ['Gross PnL', <span className={`${trade.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>{formatPnl(trade.pnl)}</span>],
+                  ['Fees', <span className="loss-text">{fees}</span>],
+                  ['Funding', funding !== null
+                    ? <span className={funding >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(funding)}</span>
+                    : <span className="secondary-text">{'\u2014'}</span>],
+                  ['Net PnL', <span className={`${totalNet >= 0 ? 'profit-text' : 'loss-text'} font-bold`}>{formatPnl(totalNet)}</span>],
+                ];
+                return rows.map(([label, value], i) => (
+                  <div key={i} className="stat-row">
+                    <span className="stat-label">{label}</span>
+                    <span>{value}</span>
+                  </div>
+                ));
+              })()}
             </div>
 
             {/* Notes + Tags */}

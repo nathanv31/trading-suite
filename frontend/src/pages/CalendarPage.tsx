@@ -2,7 +2,8 @@ import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTrades } from '../context/TradeContext';
 import { dateToKey, formatHold, formatPnl, MONTHS } from '../utils/formatters';
-import { getDayNote, saveDayNote, getWeekNote, saveWeekNote } from '../api/client';
+import { getDayNote, saveDayNote, getWeekNote, saveWeekNote, getDailyFunding } from '../api/client';
+import { useWallet } from '../context/WalletContext';
 import type { Trade, WeekNotes } from '../types';
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -12,6 +13,7 @@ const DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 export default function CalendarPage() {
   const navigate = useNavigate();
   const { trades, loading, error, refreshTrades } = useTrades();
+  const { wallet } = useWallet();
   const now = new Date();
   const [calYear, setCalYear] = useState(now.getFullYear());
   const [calMonth, setCalMonth] = useState(now.getMonth());
@@ -20,20 +22,37 @@ export default function CalendarPage() {
   const [dayNote, setDayNote] = useState('');
   const [weekNotes, setWeekNotes] = useState<WeekNotes>({ review: '', well: '', improve: '' });
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [dailyFunding, setDailyFunding] = useState<Record<string, number>>({});
 
-  // Build day map: YYYY-MM-DD -> { trades, pnl }
+  // Fetch daily funding data
+  useEffect(() => {
+    if (wallet && trades.length > 0) {
+      getDailyFunding(wallet).then(setDailyFunding).catch(() => {});
+    }
+  }, [wallet, trades]);
+
+  // Build day map: YYYY-MM-DD -> { trades, tradePnl, funding, pnl }
   // Allocate each trade to the date it was fully closed (fall back to open_time if still open)
   const dayMap = useMemo(() => {
-    const map: Record<string, { trades: Trade[]; pnl: number }> = {};
+    const map: Record<string, { trades: Trade[]; tradePnl: number; funding: number; pnl: number }> = {};
     trades.forEach(t => {
       const d = new Date(t.close_time ?? t.open_time);
       const key = dateToKey(d);
-      if (!map[key]) map[key] = { trades: [], pnl: 0 };
+      if (!map[key]) map[key] = { trades: [], tradePnl: 0, funding: 0, pnl: 0 };
       map[key].trades.push(t);
-      map[key].pnl += t.pnl - t.fees;
+      map[key].tradePnl += t.pnl - t.fees;
     });
+    // Merge funding into existing days and create entries for funding-only days
+    for (const [dateKey, amount] of Object.entries(dailyFunding)) {
+      if (!map[dateKey]) map[dateKey] = { trades: [], tradePnl: 0, funding: 0, pnl: 0 };
+      map[dateKey].funding = amount;
+    }
+    // Compute total pnl = tradePnl + funding
+    for (const data of Object.values(map)) {
+      data.pnl = data.tradePnl + data.funding;
+    }
     return map;
-  }, [trades]);
+  }, [trades, dailyFunding]);
 
   // Build calendar cells
   const calendarWeeks = useMemo(() => {
@@ -117,12 +136,17 @@ export default function CalendarPage() {
     });
     if (!week) return null;
     const weekTrades: Trade[] = [];
+    let weekFunding = 0;
     week.forEach(c => {
       if (!c.date) return;
       const data = dayMap[dateToKey(c.date)];
-      if (data) weekTrades.push(...data.trades);
+      if (data) {
+        weekTrades.push(...data.trades);
+        weekFunding += data.funding;
+      }
     });
-    const pnl = weekTrades.reduce((s, t) => s + t.pnl - t.fees, 0);
+    const tradePnl = weekTrades.reduce((s, t) => s + t.pnl - t.fees, 0);
+    const pnl = tradePnl + weekFunding;
     const wins = weekTrades.filter(t => (t.pnl - t.fees) > 0);
     const losses = weekTrades.filter(t => (t.pnl - t.fees) < 0);
     const winRate = weekTrades.length ? (wins.length / weekTrades.length * 100).toFixed(0) : '0';
@@ -130,7 +154,7 @@ export default function CalendarPage() {
     const avgWin = wins.length ? wins.reduce((s, t) => s + (t.pnl - t.fees), 0) / wins.length : 0;
     const avgLoss = losses.length ? Math.abs(losses.reduce((s, t) => s + (t.pnl - t.fees), 0) / losses.length) : 0;
     const rr = avgLoss > 0 ? (avgWin / avgLoss).toFixed(2) : wins.length > 0 ? '\u221e' : '\u2014';
-    return { week, trades: weekTrades, pnl, wins: wins.length, losses: losses.length, winRate, fees, rr };
+    return { week, trades: weekTrades, pnl, tradePnl, funding: weekFunding, wins: wins.length, losses: losses.length, winRate, fees, rr };
   }, [selectedWeekKey, calendarWeeks, dayMap]);
 
   if (loading) {
@@ -197,8 +221,9 @@ export default function CalendarPage() {
           {/* Week rows */}
           {calendarWeeks.map((week, wi) => {
             const weekTrades: Trade[] = [];
-            week.forEach(c => { if (c.date) { const d = dayMap[dateToKey(c.date)]; if (d) weekTrades.push(...d.trades); }});
-            const weekPnl = weekTrades.reduce((s, t) => s + t.pnl - t.fees, 0);
+            let weekFunding = 0;
+            week.forEach(c => { if (c.date) { const d = dayMap[dateToKey(c.date)]; if (d) { weekTrades.push(...d.trades); weekFunding += d.funding; } }});
+            const weekPnl = weekTrades.reduce((s, t) => s + t.pnl - t.fees, 0) + weekFunding;
             const hasWeekTrades = weekTrades.length > 0;
             const weekFirst = week.find(c => c.date)?.date;
             const weekKey = weekFirst ? dateToKey(weekFirst) : `w${wi}`;
@@ -242,17 +267,19 @@ export default function CalendarPage() {
                       onClick={() => openDay(key)}
                     >
                       <span className={`cal-cell-day${isToday ? ' today' : ''}`}>{c.day}</span>
-                      {data && (
+                      {data && (data.trades.length > 0 || data.funding !== 0) && (
                         <div className="cal-cell-data">
                           <div className={`cal-cell-pnl ${data.pnl >= 0 ? 'profit' : 'loss'}`}>
                             {formatPnl(data.pnl)}
                           </div>
                           <div className="cal-cell-count">
-                            {data.trades.length} trade{data.trades.length !== 1 ? 's' : ''}
+                            {data.trades.length > 0
+                              ? `${data.trades.length} trade${data.trades.length !== 1 ? 's' : ''}`
+                              : 'funding only'}
                           </div>
                         </div>
                       )}
-                      {data && (
+                      {data && (data.trades.length > 0 || data.funding !== 0) && (
                         <div className={`cal-cell-bar ${data.pnl >= 0 ? 'profit' : 'loss'}`} />
                       )}
                     </div>
@@ -288,13 +315,25 @@ export default function CalendarPage() {
             </div>
 
             {/* Summary card */}
-            {selectedDayData && selectedDayData.trades.length > 0 ? (
+            {selectedDayData && (selectedDayData.trades.length > 0 || selectedDayData.funding !== 0) ? (
               <div className={`cal-summary-card ${selectedDayData.pnl >= 0 ? 'profit' : 'loss'}`}>
                 <div className="cal-summary-label">{selectedDayData.pnl >= 0 ? 'Total Profit' : 'Total Loss'}</div>
                 <div className={`cal-summary-value ${selectedDayData.pnl >= 0 ? 'profit-text' : 'loss-text'}`}>
                   {formatPnl(selectedDayData.pnl)}
                 </div>
                 <div className="cal-summary-sub">{selectedDayData.trades.length} Trade{selectedDayData.trades.length !== 1 ? 's' : ''}</div>
+                {(selectedDayData.funding !== 0 || selectedDayData.trades.length > 0) && (
+                  <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.8, borderTop: '1px solid var(--border-color)', paddingTop: 6 }}>
+                    <div className="flex justify-between">
+                      <span className="secondary-text">Trading PnL</span>
+                      <span className={selectedDayData.tradePnl >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(selectedDayData.tradePnl)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="secondary-text">Funding</span>
+                      <span className={selectedDayData.funding >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(selectedDayData.funding)}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="cal-summary-card flat">
@@ -384,6 +423,18 @@ export default function CalendarPage() {
               <div className="cal-summary-sub">
                 {selectedWeekData.trades.length} trades &middot; {selectedWeekData.wins}W / {selectedWeekData.losses}L
               </div>
+              {selectedWeekData.funding !== 0 && (
+                <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.8, borderTop: '1px solid var(--border-color)', paddingTop: 6 }}>
+                  <div className="flex justify-between">
+                    <span className="secondary-text">Trading PnL</span>
+                    <span className={selectedWeekData.tradePnl >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(selectedWeekData.tradePnl)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="secondary-text">Funding</span>
+                    <span className={selectedWeekData.funding >= 0 ? 'profit-text' : 'loss-text'}>{formatPnl(selectedWeekData.funding)}</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Stats row */}
@@ -412,12 +463,13 @@ export default function CalendarPage() {
               const data = dayMap[key];
               const pnl = data ? data.pnl : null;
               const cnt = data ? data.trades.length : 0;
+              const hasActivity = cnt > 0 || (data && data.funding !== 0);
               return (
                 <div
                   key={i}
                   className="cal-trade-item"
-                  style={{ cursor: cnt > 0 ? 'pointer' : 'default' }}
-                  onClick={() => cnt > 0 && openDay(key)}
+                  style={{ cursor: hasActivity ? 'pointer' : 'default' }}
+                  onClick={() => hasActivity && openDay(key)}
                 >
                   <div className="cal-trade-bar" style={{
                     background: pnl === null ? 'var(--border-color)' : pnl >= 0 ? 'var(--profit-color)' : 'var(--loss-color)'
