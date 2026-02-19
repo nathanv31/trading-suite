@@ -80,6 +80,19 @@ def _cache_trades(wallet, trades):
     ]
     conn = get_db()
     try:
+        # Delete child records that reference trades via foreign keys
+        conn.execute(
+            "DELETE FROM trade_screenshots WHERE trade_id IN (SELECT id FROM trades WHERE wallet = ?)",
+            (wallet,),
+        )
+        conn.execute(
+            "DELETE FROM trade_tags WHERE trade_id IN (SELECT id FROM trades WHERE wallet = ?)",
+            (wallet,),
+        )
+        conn.execute(
+            "DELETE FROM trade_notes WHERE trade_id IN (SELECT id FROM trades WHERE wallet = ?)",
+            (wallet,),
+        )
         conn.execute("DELETE FROM trades WHERE wallet = ?", (wallet,))
         conn.executemany(
             """INSERT INTO trades
