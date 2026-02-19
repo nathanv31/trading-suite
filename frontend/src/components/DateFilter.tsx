@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DOW = ['Mo','Tu','We','Th','Fr','Sa','Su'];
 
 type DateMode = 'range' | 'before' | 'after';
@@ -197,7 +196,7 @@ export default function DateFilter({ from, to, onApply, onClear }: Props) {
   else if (from) btnLabel = `From ${from}`;
   else if (to) btnLabel = `Until ${to}`;
 
-  function renderCalendar(weeks: ReturnType<typeof buildCells>, monthIdx: number) {
+  function renderCalendar(weeks: ReturnType<typeof buildCells>) {
     return (
       <div className="df-cal">
         <div className="df-dow-row">
@@ -295,8 +294,8 @@ export default function DateFilter({ from, to, onApply, onClear }: Props) {
 
             {/* Dual Calendars */}
             <div className="df-cal-pair">
-              {renderCalendar(leftWeeks, leftMonth)}
-              {renderCalendar(rightWeeks, rightMonth)}
+              {renderCalendar(leftWeeks)}
+              {renderCalendar(rightWeeks)}
             </div>
 
             {/* Time inputs + summary */}

@@ -3,6 +3,7 @@ import type { Trade } from '../../types';
 import { formatHold, formatPrice, formatPnl, formatDateTime } from '../../utils/formatters';
 import { getTradeNotes, saveTradeNotes, getTradeTags, addTradeTag, removeTradeTag, getTradeFunding } from '../../api/client';
 import { useTrades } from '../../context/TradeContext';
+import ScreenshotGallery from './ScreenshotGallery';
 import { useWallet } from '../../context/WalletContext';
 
 interface Props {
@@ -24,7 +25,6 @@ export default function JournalRow({ trade }: Props) {
 
   const netPnl = trade.pnl - trade.fees;
   const isWin = netPnl > 0;
-  const openDt = new Date(trade.open_time);
   const closeDt = trade.close_time ? new Date(trade.close_time) : null;
   const holdStr = formatHold(trade.hold_ms);
   const sideStr = trade.side === 'B' ? '\u2197 Long' : '\u2198 Short';
@@ -237,6 +237,7 @@ export default function JournalRow({ trade }: Props) {
               </div>
             </div>
           </div>
+          <ScreenshotGallery tradeId={trade.id} expanded={expanded} />
         </div>
       )}
     </div>
