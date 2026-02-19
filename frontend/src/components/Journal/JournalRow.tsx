@@ -235,9 +235,9 @@ export default function JournalRow({ trade }: Props) {
                   </div>
                 )}
               </div>
+              <ScreenshotGallery tradeId={trade.id} expanded={expanded} />
             </div>
           </div>
-          <ScreenshotGallery tradeId={trade.id} expanded={expanded} />
         </div>
       )}
     </div>

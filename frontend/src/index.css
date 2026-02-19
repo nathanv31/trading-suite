@@ -303,14 +303,14 @@ body {
 }
 
 /* ── Screenshots ── */
-.ss-section { margin-top: 16px; }
+.ss-section { margin-top: 14px; }
 .ss-section h4 {
   font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--text-secondary); margin-bottom: 12px;
 }
 .ss-gallery { display: flex; flex-wrap: wrap; gap: 10px; }
 .ss-thumb {
-  position: relative; width: 120px; height: 80px; border-radius: 6px;
+  position: relative; width: 100px; height: 68px; border-radius: 6px;
   overflow: hidden; border: 1px solid var(--border-color);
   cursor: pointer; transition: border-color 0.15s; flex-shrink: 0;
 }
@@ -327,7 +327,7 @@ body {
 .ss-thumb:hover .ss-delete-btn { opacity: 1; }
 .ss-delete-btn:hover { color: var(--loss-color); border-color: var(--loss-color); }
 .ss-upload-zone {
-  width: 120px; height: 80px; border: 1px dashed var(--border-color);
+  width: 100px; height: 68px; border: 1px dashed var(--border-color);
   border-radius: 6px; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 4px;
   cursor: pointer; transition: border-color 0.15s, background 0.15s;
