@@ -19,66 +19,81 @@ def _get_wallet():
 
 def _cache_fills(wallet, fills):
     """Store fills in SQLite, skipping duplicates."""
+    if not fills:
+        return
+    rows = [
+        (
+            f.get("tid", f.get("oid")),
+            f["coin"],
+            f["px"],
+            f["sz"],
+            f["side"],
+            f.get("dir", ""),
+            f["time"],
+            f.get("startPosition", "0"),
+            f.get("closedPnl", "0"),
+            f.get("fee", "0"),
+            f["oid"],
+            f.get("hash", ""),
+            1 if f.get("crossed") else 0,
+            wallet,
+        )
+        for f in fills
+    ]
     conn = get_db()
-    for f in fills:
-        try:
-            conn.execute(
-                """INSERT OR IGNORE INTO fills
-                   (tid, coin, px, sz, side, dir, time, start_position,
-                    closed_pnl, fee, oid, hash, crossed, wallet)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    f.get("tid", f.get("oid")),
-                    f["coin"],
-                    f["px"],
-                    f["sz"],
-                    f["side"],
-                    f.get("dir", ""),
-                    f["time"],
-                    f.get("startPosition", "0"),
-                    f.get("closedPnl", "0"),
-                    f.get("fee", "0"),
-                    f["oid"],
-                    f.get("hash", ""),
-                    1 if f.get("crossed") else 0,
-                    wallet,
-                ),
-            )
-        except Exception as e:
-            print(f"[DB] Skipping fill: {e}")
-    conn.commit()
-    conn.close()
+    try:
+        conn.executemany(
+            """INSERT OR IGNORE INTO fills
+               (tid, coin, px, sz, side, dir, time, start_position,
+                closed_pnl, fee, oid, hash, crossed, wallet)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"[DB] Error caching fills: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 def _cache_trades(wallet, trades):
     """Store grouped trades in SQLite, replacing existing ones for this wallet."""
+    rows = [
+        (
+            wallet,
+            t["coin"],
+            t["side"],
+            t["entry_px"],
+            t.get("exit_px"),
+            t["size"],
+            t["pnl"],
+            t["fees"],
+            t["open_time"],
+            t.get("close_time"),
+            t.get("hold_ms"),
+            t.get("mae"),
+            t.get("mfe"),
+            t["fill_ids"],
+        )
+        for t in trades
+    ]
     conn = get_db()
-    conn.execute("DELETE FROM trades WHERE wallet = ?", (wallet,))
-    for t in trades:
-        conn.execute(
+    try:
+        conn.execute("DELETE FROM trades WHERE wallet = ?", (wallet,))
+        conn.executemany(
             """INSERT INTO trades
                (wallet, coin, side, entry_px, exit_px, size, pnl, fees,
                 open_time, close_time, hold_ms, mae, mfe, fill_ids)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                wallet,
-                t["coin"],
-                t["side"],
-                t["entry_px"],
-                t.get("exit_px"),
-                t["size"],
-                t["pnl"],
-                t["fees"],
-                t["open_time"],
-                t.get("close_time"),
-                t.get("hold_ms"),
-                t.get("mae"),
-                t.get("mfe"),
-                t["fill_ids"],
-            ),
+            rows,
         )
-    conn.commit()
-    conn.close()
+        conn.commit()
+    except Exception as e:
+        print(f"[DB] Error caching trades: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 def _load_cached_trades(wallet):
@@ -215,25 +230,31 @@ def get_pnl_summary():
 
 def _cache_funding(wallet, funding_data):
     """Store funding entries in SQLite, skipping duplicates."""
+    if not funding_data:
+        return
+    rows = [
+        (
+            wallet,
+            f.get("delta", {}).get("coin", ""),
+            float(f.get("delta", {}).get("usdc", 0)),
+            f["time"],
+            f.get("hash", ""),
+        )
+        for f in funding_data
+    ]
     conn = get_db()
-    for f in funding_data:
-        try:
-            delta = f.get("delta", {})
-            conn.execute(
-                """INSERT OR IGNORE INTO funding (wallet, coin, usdc, time, hash)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (
-                    wallet,
-                    delta.get("coin", ""),
-                    float(delta.get("usdc", 0)),
-                    f["time"],
-                    f.get("hash", ""),
-                ),
-            )
-        except Exception as e:
-            print(f"[DB] Skipping funding entry: {e}")
-    conn.commit()
-    conn.close()
+    try:
+        conn.executemany(
+            """INSERT OR IGNORE INTO funding (wallet, coin, usdc, time, hash)
+               VALUES (?, ?, ?, ?, ?)""",
+            rows,
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"[DB] Error caching funding: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 def _ensure_funding_cached(wallet):
