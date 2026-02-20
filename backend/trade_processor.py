@@ -201,3 +201,99 @@ def _finalize_trade(t):
         "mfe": round(mfe, 6),
         "fill_ids": json.dumps(t["fill_ids"]),
     }
+
+
+def enrich_trades_with_candles(trades, candle_fetcher):
+    """Enrich MFE/MAE using actual candle highs/lows instead of fill prices only.
+
+    Fetches 1-minute candles per coin (one API call per coin) and updates
+    each trade's mae/mfe to reflect the true market extremes during the trade.
+
+    Args:
+        trades: List of finalized trade dicts from process_fills_to_trades().
+        candle_fetcher: Callable(coin, interval, start_time, end_time) -> list of candle dicts.
+
+    Returns:
+        The same trades list with mae/mfe updated in place.
+    """
+    if not trades:
+        return trades
+
+    # Group trades by coin
+    by_coin = {}
+    for t in trades:
+        coin = t["coin"]
+        if coin not in by_coin:
+            by_coin[coin] = []
+        by_coin[coin].append(t)
+
+    for coin, coin_trades in by_coin.items():
+        # Find the full time range for this coin
+        min_time = min(t["open_time"] for t in coin_trades)
+        max_time = max(t["close_time"] for t in coin_trades)
+
+        try:
+            candles = candle_fetcher(coin, "1m", min_time, max_time)
+        except Exception as e:
+            print(f"[ENRICH] Failed to fetch candles for {coin}: {e}")
+            continue
+
+        if not candles:
+            continue
+
+        # Parse candles into (start_time, high, low) tuples, sorted by time
+        parsed = []
+        for c in candles:
+            try:
+                ct = int(c["t"])
+                ch = float(c["h"])
+                cl = float(c["l"])
+                parsed.append((ct, ch, cl))
+            except (KeyError, ValueError):
+                continue
+
+        if not parsed:
+            continue
+
+        parsed.sort(key=lambda x: x[0])
+
+        # For each trade, find candles within its time window and update MFE/MAE
+        for t in coin_trades:
+            entry_px = t["entry_px"]
+            if entry_px <= 0:
+                continue
+
+            is_long = t["side"] == "B"
+            open_time = t["open_time"]
+            close_time = t["close_time"]
+
+            # Filter candles to this trade's window
+            trade_high = 0.0
+            trade_low = float("inf")
+            found = False
+            for ct, ch, cl in parsed:
+                # 1m candle at time ct covers [ct, ct+60000)
+                # Include candle if it overlaps with the trade window
+                if ct + 60000 < open_time:
+                    continue
+                if ct > close_time:
+                    break
+                trade_high = max(trade_high, ch)
+                trade_low = min(trade_low, cl)
+                found = True
+
+            if not found:
+                continue
+
+            # Compute updated MFE/MAE from candle extremes
+            if is_long:
+                mfe_px = trade_high
+                mae_px = trade_low
+            else:
+                mfe_px = trade_low
+                mae_px = trade_high
+
+            t["mfe"] = round(abs(mfe_px - entry_px) / entry_px, 6)
+            t["mae"] = round(abs(mae_px - entry_px) / entry_px, 6)
+
+    return trades
