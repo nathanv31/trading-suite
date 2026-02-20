@@ -91,6 +91,8 @@ def _process_coin_fills(coin, fills):
                 current["fill_ids"].append(tid)
                 current["max_px"] = max(current["max_px"], px)
                 current["min_px"] = min(current["min_px"], px)
+                current["exit_value"] += px * sz
+                current["exit_size"] += sz
                 current["last_px"] = px
                 current["last_time"] = f["time"]
 
@@ -118,6 +120,8 @@ def _process_coin_fills(coin, fills):
                 current["fill_ids"].append(tid)
                 if closed_pnl != 0:
                     current["realized_pnl"] += closed_pnl
+                    current["exit_value"] += px * sz
+                    current["exit_size"] += sz
                 current["max_px"] = max(current["max_px"], px)
                 current["min_px"] = min(current["min_px"], px)
                 current["last_px"] = px
@@ -148,6 +152,8 @@ def _new_trade(coin, fill, px, sz, fee, tid):
         "last_px": px,
         "max_px": px,
         "min_px": px,
+        "exit_value": 0.0,
+        "exit_size": 0.0,
         "fill_ids": [tid],
         "orphan": False,
     }
@@ -159,7 +165,7 @@ def _finalize_trade(t):
         return None
 
     avg_entry = t["entry_value"] / t["entry_size"] if t["entry_size"] > 0 else t["last_px"]
-    exit_px = t["last_px"]
+    exit_px = t["exit_value"] / t["exit_size"] if t["exit_size"] > 0 else t["last_px"]
     is_long = t["side"] == "B"
 
     # MAE: max adverse excursion (worst price vs entry)
