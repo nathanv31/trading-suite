@@ -1,19 +1,33 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, TimeScale, ArcElement, Filler, Tooltip } from 'chart.js';
 import 'chartjs-adapter-luxon';
 import { Line, Doughnut } from 'react-chartjs-2';
+import type { ChartData } from 'chart.js';
 import { useTrades } from '../context/TradeContext';
 import { useWallet } from '../context/WalletContext';
 import { formatCurrency, formatPnl, formatVolume, formatDate, formatTime, formatPrice } from '../utils/formatters';
 import { getPnlSummary } from '../api/client';
+import {
+  COLORS, aggregateEquityData, lineChartOptions, lineDatasetDefaults, createGradient, tooltipConfig,
+  type AggregationLevel,
+} from '../utils/chartConfig';
 import type { PnlSummary } from '../types';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, TimeScale, ArcElement, Filler, Tooltip);
+
+const AGG_OPTIONS: { value: AggregationLevel; label: string }[] = [
+  { value: 'trade', label: 'Per Trade' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+];
 
 export default function HomePage() {
   const { trades, loading, error, refreshTrades } = useTrades();
   const { wallet } = useWallet();
   const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
+  const [aggLevel, setAggLevel] = useState<AggregationLevel>('daily');
+  const chartRef = useRef<ChartJS<'line'> | null>(null);
 
   useEffect(() => {
     if (wallet && trades.length > 0) {
@@ -45,21 +59,65 @@ export default function HomePage() {
     };
   }, [trades]);
 
-  const pnlChartData = useMemo(() => {
-    const sorted = [...trades].sort((a, b) => a.open_time - b.open_time);
-    let cum = 0;
-    const data = sorted.map(t => {
-      cum += t.pnl - t.fees;
-      return { x: new Date(t.open_time), y: parseFloat(cum.toFixed(2)) };
-    });
-    const color = cum >= 0 ? '#4ec9b0' : '#f48771';
-    const bg = cum >= 0 ? 'rgba(78,201,176,0.1)' : 'rgba(244,135,113,0.1)';
-    return { data, color, bg };
-  }, [trades]);
+  const equityData = useMemo(() => aggregateEquityData(trades, aggLevel), [trades, aggLevel]);
+
+  const finalPnl = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
+  const isProfit = finalPnl >= 0;
+  const lineColor = isProfit ? COLORS.profit : COLORS.loss;
+  const lineColorRgb = isProfit ? COLORS.profitRgb : COLORS.lossRgb;
+
+  const getGradient = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart) return `rgba(${lineColorRgb},0.1)`;
+    const { ctx, chartArea } = chart;
+    if (!chartArea) return `rgba(${lineColorRgb},0.1)`;
+    return createGradient(ctx, chartArea, lineColorRgb, 0.28, 0);
+  }, [lineColorRgb]);
+
+  const pnlChartData: ChartData<'line'> = useMemo(() => ({
+    datasets: [{
+      data: equityData,
+      ...lineDatasetDefaults(lineColor, lineColorRgb),
+      backgroundColor: getGradient(),
+    }],
+  }), [equityData, lineColor, lineColorRgb, getGradient]);
+
+  const pnlChartOptions = useMemo(() => lineChartOptions({
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        ...tooltipConfig,
+        mode: 'index' as const,
+        intersect: false,
+        callbacks: {
+          title: (items) => {
+            if (!items.length) return '';
+            const d = new Date(items[0].parsed.x);
+            if (aggLevel === 'monthly') return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+            if (aggLevel === 'weekly') return `Week of ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+            return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+          },
+          label: (item) => `  Cumulative P&L: ${formatCurrency(item.parsed.y)}`,
+        },
+      },
+    },
+  }), [aggLevel]);
 
   const recentTrades = useMemo(() => {
     return [...trades].sort((a, b) => b.open_time - a.open_time).slice(0, 3);
   }, [trades]);
+
+  // Update gradient when chart resizes
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (chart && chart.data.datasets[0]) {
+      const { ctx, chartArea } = chart;
+      if (chartArea) {
+        chart.data.datasets[0].backgroundColor = createGradient(ctx, chartArea, lineColorRgb, 0.28, 0);
+        chart.update('none');
+      }
+    }
+  }, [equityData, lineColorRgb]);
 
   if (loading) {
     return (
@@ -136,11 +194,31 @@ export default function HomePage() {
               data={{
                 datasets: [{
                   data: [metrics.wins, metrics.losses],
-                  backgroundColor: ['#4ec9b0', '#f48771'],
+                  backgroundColor: [
+                    `rgba(${COLORS.profitRgb},0.8)`,
+                    `rgba(${COLORS.lossRgb},0.8)`,
+                  ],
+                  hoverBackgroundColor: [COLORS.profit, COLORS.loss],
                   borderWidth: 0,
+                  spacing: 2,
                 }],
               }}
-              options={{ cutout: '70%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
+              options={{
+                cutout: '72%',
+                animation: { animateRotate: true, animateScale: true },
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    ...tooltipConfig,
+                    callbacks: {
+                      label: (item) => {
+                        const label = item.dataIndex === 0 ? 'Wins' : 'Losses';
+                        return `  ${label}: ${item.raw}`;
+                      },
+                    },
+                  },
+                },
+              }}
             />
           </div>
           <div className="text-center mt-2">
@@ -179,32 +257,26 @@ export default function HomePage() {
       <div className="metric-card mb-6">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-xl font-bold">Lifetime PNL</h3>
+          <div className="chart-agg-toggle">
+            {AGG_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                className={`chart-agg-btn${aggLevel === opt.value ? ' active' : ''}`}
+                onClick={() => setAggLevel(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className={`text-2xl font-bold mb-4 ${(pnlSummary?.net_pnl ?? metrics.netPnl) >= 0 ? 'profit-text' : 'loss-text'}`}>
           {formatCurrency(pnlSummary?.net_pnl ?? metrics.netPnl)}
         </div>
         <div style={{ height: 300 }}>
           <Line
-            data={{
-              datasets: [{
-                data: pnlChartData.data,
-                borderColor: pnlChartData.color,
-                backgroundColor: pnlChartData.bg,
-                fill: true,
-                tension: 0.4,
-                borderWidth: 2,
-                pointRadius: 0,
-              }],
-            }}
-            options={{
-              responsive: true,
-              maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: {
-                x: { type: 'time', grid: { color: '#3e3e42' }, ticks: { color: '#858585' } },
-                y: { grid: { color: '#3e3e42' }, ticks: { color: '#858585' } },
-              },
-            }}
+            ref={chartRef}
+            data={pnlChartData}
+            options={pnlChartOptions}
           />
         </div>
       </div>
