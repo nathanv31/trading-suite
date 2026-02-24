@@ -81,7 +81,7 @@ export const tooltipConfig = {
   borderColor: COLORS.gridLight,
   borderWidth: 1,
   titleColor: COLORS.accent,
-  titleFont: { ...FONT, weight: '600' as const },
+  titleFont: { ...FONT, weight: 'bold' as const },
   bodyColor: '#d4d4d4',
   bodyFont: FONT,
   padding: { top: 10, bottom: 10, left: 14, right: 14 },
@@ -184,7 +184,7 @@ export function barChartOptions(overrides?: Partial<ChartOptions<'bar'>>): Chart
 }
 
 // ── Line dataset defaults ──
-export function lineDatasetDefaults(color: string, colorRgb: string) {
+export function lineDatasetDefaults(color: string, _colorRgb?: string) {
   return {
     borderColor: color,
     borderWidth: 2.5,

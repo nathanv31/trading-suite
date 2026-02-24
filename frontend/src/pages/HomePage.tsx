@@ -2,7 +2,6 @@ import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, TimeScale, ArcElement, Filler, Tooltip } from 'chart.js';
 import 'chartjs-adapter-luxon';
 import { Line, Doughnut } from 'react-chartjs-2';
-import type { ChartData } from 'chart.js';
 import { useTrades } from '../context/TradeContext';
 import { useWallet } from '../context/WalletContext';
 import { formatCurrency, formatPnl, formatVolume, formatDate, formatTime, formatPrice } from '../utils/formatters';
@@ -74,9 +73,9 @@ export default function HomePage() {
     return createGradient(ctx, chartArea, lineColorRgb, 0.28, 0);
   }, [lineColorRgb]);
 
-  const pnlChartData: ChartData<'line'> = useMemo(() => ({
+  const pnlChartData = useMemo(() => ({
     datasets: [{
-      data: equityData,
+      data: equityData as any,
       ...lineDatasetDefaults(lineColor, lineColorRgb),
       backgroundColor: getGradient(),
     }],
@@ -92,12 +91,12 @@ export default function HomePage() {
         callbacks: {
           title: (items) => {
             if (!items.length) return '';
-            const d = new Date(items[0].parsed.x);
+            const d = new Date(items[0].parsed.x ?? 0);
             if (aggLevel === 'monthly') return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
             if (aggLevel === 'weekly') return `Week of ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
             return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
           },
-          label: (item) => `  Cumulative P&L: ${formatCurrency(item.parsed.y)}`,
+          label: (item) => `  Cumulative P&L: ${formatCurrency(item.parsed.y ?? 0)}`,
         },
       },
     },

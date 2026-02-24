@@ -24,7 +24,6 @@ export default function JournalRow({ trade }: Props) {
 
   const netPnl = trade.pnl - trade.fees;
   const isWin = netPnl > 0;
-  const openDt = new Date(trade.open_time);
   const closeDt = trade.close_time ? new Date(trade.close_time) : null;
   const holdStr = formatHold(trade.hold_ms);
   const sideStr = trade.side === 'B' ? '\u2197 Long' : '\u2198 Short';

@@ -78,8 +78,8 @@ export default function AnalyticsPage() {
   const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
   const [equityAgg, setEquityAgg] = useState<AggregationLevel>('daily');
   const [ddAgg, setDdAgg] = useState<AggregationLevel>('daily');
-  const equityChartRef = useRef<ChartJS<'line'> | null>(null);
-  const ddChartRef = useRef<ChartJS<'line'> | null>(null);
+  const equityChartRef = useRef<ChartJS<'line'> | null>(null) as any;
+  const ddChartRef = useRef<ChartJS<'line'> | null>(null) as any;
 
   const isUnfiltered = !sideFilter && !resultFilter && !coinFilter && selectedTags.size === 0 && !dateFrom && !dateTo;
 
@@ -366,12 +366,12 @@ export default function AnalyticsPage() {
                     callbacks: {
                       title: (items) => {
                         if (!items.length) return '';
-                        const d = new Date(items[0].parsed.x);
+                        const d = new Date(items[0].parsed.x ?? 0);
                         if (equityAgg === 'monthly') return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
                         if (equityAgg === 'weekly') return `Week of ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
                         return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
                       },
-                      label: (item) => `  Cumulative: ${formatCurrency(item.parsed.y)}`,
+                      label: (item) => `  Cumulative: ${formatCurrency(item.parsed.y ?? 0)}`,
                     },
                   },
                 },
@@ -411,7 +411,7 @@ export default function AnalyticsPage() {
                     mode: 'index' as const,
                     intersect: false,
                     callbacks: {
-                      label: (item) => `  Drawdown: ${item.parsed.y.toFixed(2)}%`,
+                      label: (item) => `  Drawdown: ${(item.parsed.y ?? 0).toFixed(2)}%`,
                     },
                   },
                 },
@@ -564,11 +564,11 @@ export default function AnalyticsPage() {
                   tooltip: {
                     ...tooltipConfig,
                     callbacks: {
-                      title: (items) => {
+                      title: (items: any[]) => {
                         if (!items.length) return '';
                         return new Date(items[0].parsed.x).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
                       },
-                      label: (item) => {
+                      label: (item: any) => {
                         const v = item.parsed.y;
                         return `  Streak: ${v > 0 ? '+' : ''}${v} ${v > 0 ? 'wins' : 'losses'}`;
                       },
@@ -630,7 +630,7 @@ export default function AnalyticsPage() {
                   tooltip: {
                     ...tooltipConfig,
                     callbacks: {
-                      label: (item) => `  MAE: ${item.parsed.x.toFixed(2)}%  MFE: ${item.parsed.y.toFixed(2)}%`,
+                      label: (item: any) => `  MAE: ${item.parsed.x.toFixed(2)}%  MFE: ${item.parsed.y.toFixed(2)}%`,
                     },
                   },
                 },
