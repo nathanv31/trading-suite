@@ -23,8 +23,8 @@ export default function HomePage() {
 
   const metrics = useMemo(() => {
     if (!trades.length) return null;
-    const wins = trades.filter(t => t.pnl > 0);
-    const losses = trades.filter(t => t.pnl < 0);
+    const wins = trades.filter(t => (t.pnl - t.fees) > 0);
+    const losses = trades.filter(t => (t.pnl - t.fees) < 0);
     const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
     const totalFees = trades.reduce((s, t) => s + t.fees, 0);
     const netPnl = totalPnl - totalFees;
