@@ -5,7 +5,7 @@ import { Line, Doughnut } from 'react-chartjs-2';
 import { useTrades } from '../context/TradeContext';
 import { useWallet } from '../context/WalletContext';
 import { formatCurrency, formatPnl, formatVolume, formatDate, formatTime, formatPrice } from '../utils/formatters';
-import { getPnlSummary } from '../api/client';
+import { getPnlSummary, getDailyFunding } from '../api/client';
 import {
   COLORS, prepareEquityChartData, perTradeScaleOverrides,
   lineChartOptions, lineDatasetDefaults, createGradient, tooltipConfig,
@@ -27,11 +27,13 @@ export default function HomePage() {
   const { wallet } = useWallet();
   const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
   const [aggLevel, setAggLevel] = useState<AggregationLevel>('daily');
+  const [dailyFunding, setDailyFunding] = useState<Record<string, number>>({});
   const chartRef = useRef<ChartJS<'line'> | null>(null);
 
   useEffect(() => {
     if (wallet && trades.length > 0) {
       getPnlSummary(wallet).then(setPnlSummary).catch(() => {});
+      getDailyFunding(wallet).then(setDailyFunding).catch(() => {});
     }
   }, [wallet, trades]);
 
@@ -59,7 +61,7 @@ export default function HomePage() {
     };
   }, [trades]);
 
-  const equityChart = useMemo(() => prepareEquityChartData(trades, aggLevel), [trades, aggLevel]);
+  const equityChart = useMemo(() => prepareEquityChartData(trades, aggLevel, dailyFunding), [trades, aggLevel, dailyFunding]);
   const equityData = equityChart.points;
 
   const finalPnl = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
