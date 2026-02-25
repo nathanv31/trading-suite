@@ -7,7 +7,8 @@ import { useWallet } from '../context/WalletContext';
 import { formatCurrency, formatPnl, formatVolume, formatDate, formatTime, formatPrice } from '../utils/formatters';
 import { getPnlSummary } from '../api/client';
 import {
-  COLORS, aggregateEquityData, lineChartOptions, lineDatasetDefaults, createGradient, tooltipConfig,
+  COLORS, prepareEquityChartData, perTradeScaleOverrides,
+  lineChartOptions, lineDatasetDefaults, createGradient, tooltipConfig,
   type AggregationLevel,
 } from '../utils/chartConfig';
 import type { PnlSummary } from '../types';
@@ -58,7 +59,8 @@ export default function HomePage() {
     };
   }, [trades]);
 
-  const equityData = useMemo(() => aggregateEquityData(trades, aggLevel), [trades, aggLevel]);
+  const equityChart = useMemo(() => prepareEquityChartData(trades, aggLevel), [trades, aggLevel]);
+  const equityData = equityChart.points;
 
   const finalPnl = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
   const isProfit = finalPnl >= 0;
@@ -76,12 +78,13 @@ export default function HomePage() {
   const pnlChartData = useMemo(() => ({
     datasets: [{
       data: equityData as any,
-      ...lineDatasetDefaults(lineColor, lineColorRgb),
+      ...lineDatasetDefaults(lineColor, lineColorRgb, equityChart.isPerTrade),
       backgroundColor: getGradient(),
     }],
-  }), [equityData, lineColor, lineColorRgb, getGradient]);
+  }), [equityData, lineColor, lineColorRgb, equityChart.isPerTrade, getGradient]);
 
   const pnlChartOptions = useMemo(() => lineChartOptions({
+    ...(equityChart.isPerTrade ? perTradeScaleOverrides(equityChart.tradeDates.length) : {}),
     plugins: {
       legend: { display: false },
       tooltip: {
@@ -91,6 +94,12 @@ export default function HomePage() {
         callbacks: {
           title: (items) => {
             if (!items.length) return '';
+            if (equityChart.isPerTrade) {
+              const idx = Math.round(items[0].parsed.x ?? 0);
+              const date = equityChart.tradeDates[idx];
+              const dateStr = date ? date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : '';
+              return `Trade #${idx + 1} \u2014 ${dateStr}`;
+            }
             const d = new Date(items[0].parsed.x ?? 0);
             if (aggLevel === 'monthly') return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
             if (aggLevel === 'weekly') return `Week of ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
@@ -100,7 +109,7 @@ export default function HomePage() {
         },
       },
     },
-  }), [aggLevel]);
+  }), [aggLevel, equityChart]);
 
   const recentTrades = useMemo(() => {
     return [...trades].sort((a, b) => b.open_time - a.open_time).slice(0, 3);

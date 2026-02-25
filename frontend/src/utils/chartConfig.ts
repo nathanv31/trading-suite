@@ -184,17 +184,17 @@ export function barChartOptions(overrides?: Partial<ChartOptions<'bar'>>): Chart
 }
 
 // ── Line dataset defaults ──
-export function lineDatasetDefaults(color: string, _colorRgb?: string) {
+export function lineDatasetDefaults(color: string, _colorRgb?: string, perTrade = false) {
   return {
     borderColor: color,
     borderWidth: 2.5,
-    pointRadius: 0,
+    pointRadius: perTrade ? 1.5 : 0,
     pointHoverRadius: 5,
     pointHoverBackgroundColor: color,
     pointHoverBorderColor: '#1e1e1e',
     pointHoverBorderWidth: 2,
-    tension: 0.4,
-    cubicInterpolationMode: 'monotone' as const,
+    tension: perTrade ? 0 : 0.4,
+    ...(perTrade ? {} : { cubicInterpolationMode: 'monotone' as const }),
     fill: true,
     // backgroundColor will be set dynamically via gradient
   };
@@ -288,6 +288,57 @@ export function aggregateEquityData(
     cum += b.netPnl;
     return { x: b.date, y: parseFloat(cum.toFixed(2)) };
   });
+}
+
+export interface EquityChartData {
+  points: DataPoint[] | { x: number; y: number }[];
+  tradeDates: Date[];
+  isPerTrade: boolean;
+}
+
+export function prepareEquityChartData(
+  trades: TradeDataInput[],
+  level: AggregationLevel
+): EquityChartData {
+  const raw = aggregateEquityData(trades, level);
+
+  if (level !== 'trade') {
+    return { points: raw, tradeDates: [], isPerTrade: false };
+  }
+
+  const tradeDates = raw.map(p => p.x);
+  const points = raw.map((p, i) => ({ x: i, y: p.y }));
+  return { points, tradeDates, isPerTrade: true };
+}
+
+export function perTradeScaleOverrides(
+  totalTrades: number,
+): Partial<ChartOptions<'line'>> {
+  return {
+    scales: {
+      x: {
+        type: 'linear' as const,
+        grid: { ...CHART_GRID, display: false },
+        ticks: {
+          ...CHART_TICKS,
+          maxTicksLimit: 8,
+          callback(value: any) {
+            const idx = Math.round(value as number);
+            if (idx < 0 || idx >= totalTrades) return '';
+            return `#${idx + 1}`;
+          },
+        },
+        border: { display: false },
+        min: 0,
+        max: Math.max(totalTrades - 1, 0),
+      },
+      y: {
+        grid: CHART_GRID,
+        ticks: CHART_TICKS,
+        border: { display: false },
+      },
+    },
+  };
 }
 
 export function aggregateDrawdownData(equityData: DataPoint[]): DataPoint[] {

@@ -13,6 +13,7 @@ import { getPnlSummary } from '../api/client';
 import {
   COLORS, CHART_GRID, CHART_TICKS,
   aggregateEquityData, aggregateDrawdownData,
+  prepareEquityChartData, perTradeScaleOverrides,
   lineChartOptions, barChartOptions, lineDatasetDefaults,
   createGradient, tooltipConfig,
   barColors as makeBarColors, barBorderColors, barHoverColors,
@@ -132,15 +133,20 @@ export default function AnalyticsPage() {
   const sorted = useMemo(() => [...filtered].sort((a, b) => a.open_time - b.open_time), [filtered]);
 
   // ── Equity curve (aggregated) ──
-  const equityData = useMemo(() => aggregateEquityData(filtered, equityAgg), [filtered, equityAgg]);
+  const equityChart = useMemo(() => prepareEquityChartData(filtered, equityAgg), [filtered, equityAgg]);
+  const equityData = equityChart.points;
   const equityFinal = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
   const equityIsProfit = equityFinal >= 0;
   const equityColor = equityIsProfit ? COLORS.profit : COLORS.loss;
   const equityColorRgb = equityIsProfit ? COLORS.profitRgb : COLORS.lossRgb;
 
   // ── Drawdown (aggregated) ──
-  const ddEquityData = useMemo(() => aggregateEquityData(filtered, ddAgg), [filtered, ddAgg]);
-  const drawdownData = useMemo(() => aggregateDrawdownData(ddEquityData), [ddEquityData]);
+  const ddChart = useMemo(() => prepareEquityChartData(filtered, ddAgg), [filtered, ddAgg]);
+  const drawdownRaw = useMemo(() => aggregateDrawdownData(aggregateEquityData(filtered, ddAgg)), [filtered, ddAgg]);
+  const drawdownData = useMemo(() => {
+    if (!ddChart.isPerTrade) return drawdownRaw;
+    return drawdownRaw.map((p, i) => ({ x: i, y: p.y }));
+  }, [drawdownRaw, ddChart.isPerTrade]);
 
   // ── Day of week ──
   const dowData = useMemo(() => {
@@ -351,12 +357,13 @@ export default function AnalyticsPage() {
               ref={equityChartRef}
               data={{
                 datasets: [{
-                  data: equityData,
-                  ...lineDatasetDefaults(equityColor, equityColorRgb),
+                  data: equityData as any,
+                  ...lineDatasetDefaults(equityColor, equityColorRgb, equityChart.isPerTrade),
                   backgroundColor: getEquityGradient(),
                 }],
               }}
               options={lineChartOptions({
+                ...(equityChart.isPerTrade ? perTradeScaleOverrides(equityChart.tradeDates.length) : {}),
                 plugins: {
                   legend: { display: false },
                   tooltip: {
@@ -366,6 +373,12 @@ export default function AnalyticsPage() {
                     callbacks: {
                       title: (items) => {
                         if (!items.length) return '';
+                        if (equityChart.isPerTrade) {
+                          const idx = Math.round(items[0].parsed.x ?? 0);
+                          const date = equityChart.tradeDates[idx];
+                          const dateStr = date ? date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+                          return `Trade #${idx + 1} \u2014 ${dateStr}`;
+                        }
                         const d = new Date(items[0].parsed.x ?? 0);
                         if (equityAgg === 'monthly') return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
                         if (equityAgg === 'weekly') return `Week of ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
@@ -397,8 +410,8 @@ export default function AnalyticsPage() {
               ref={ddChartRef}
               data={{
                 datasets: [{
-                  data: drawdownData,
-                  ...lineDatasetDefaults(COLORS.loss, COLORS.lossRgb),
+                  data: drawdownData as any,
+                  ...lineDatasetDefaults(COLORS.loss, COLORS.lossRgb, ddChart.isPerTrade),
                   borderWidth: 2,
                   backgroundColor: getDdGradient(),
                 }],
@@ -411,23 +424,39 @@ export default function AnalyticsPage() {
                     mode: 'index' as const,
                     intersect: false,
                     callbacks: {
+                      title: ddChart.isPerTrade ? (items) => {
+                        if (!items.length) return '';
+                        const idx = Math.round(items[0].parsed.x ?? 0);
+                        const date = ddChart.tradeDates[idx];
+                        const dateStr = date ? date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+                        return `Trade #${idx + 1} \u2014 ${dateStr}`;
+                      } : undefined,
                       label: (item) => `  Drawdown: ${(item.parsed.y ?? 0).toFixed(2)}%`,
                     },
                   },
                 },
-                scales: {
-                  x: {
-                    type: 'time',
-                    grid: { ...CHART_GRID, display: false },
-                    ticks: CHART_TICKS,
-                    border: { display: false },
-                  },
-                  y: {
-                    grid: CHART_GRID,
-                    ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' },
-                    border: { display: false },
-                  },
-                },
+                scales: ddChart.isPerTrade
+                  ? {
+                      ...perTradeScaleOverrides(ddChart.tradeDates.length).scales,
+                      y: {
+                        grid: CHART_GRID,
+                        ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' },
+                        border: { display: false },
+                      },
+                    }
+                  : {
+                      x: {
+                        type: 'time',
+                        grid: { ...CHART_GRID, display: false },
+                        ticks: CHART_TICKS,
+                        border: { display: false },
+                      },
+                      y: {
+                        grid: CHART_GRID,
+                        ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' },
+                        border: { display: false },
+                      },
+                    },
               })}
             />
           </div>
