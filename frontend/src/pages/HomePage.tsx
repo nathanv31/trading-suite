@@ -61,7 +61,23 @@ export default function HomePage() {
     };
   }, [trades]);
 
-  const equityChart = useMemo(() => prepareEquityChartData(trades, aggLevel, dailyFunding), [trades, aggLevel, dailyFunding]);
+  const equityChart = useMemo(() => {
+    const chart = prepareEquityChartData(trades, aggLevel, dailyFunding);
+    // Adjust equity curve so final value matches pnlSummary.net_pnl exactly.
+    // This corrects for funding gaps (cached vs live) and fills-vs-trades differences.
+    if (!pnlSummary || chart.points.length === 0) return chart;
+    const pts = chart.points;
+    const rawFinal = pts[pts.length - 1].y;
+    const target = parseFloat(pnlSummary.net_pnl.toFixed(2));
+    const adj = target - rawFinal;
+    if (Math.abs(adj) < 0.005) return chart;
+    const n = pts.length;
+    const adjusted = pts.map((p, i) => ({
+      ...p,
+      y: parseFloat((p.y + adj * ((i + 1) / n)).toFixed(2)),
+    }));
+    return { ...chart, points: adjusted };
+  }, [trades, aggLevel, dailyFunding, pnlSummary]);
   const equityData = equityChart.points;
 
   const finalPnl = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;

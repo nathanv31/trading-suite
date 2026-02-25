@@ -136,7 +136,22 @@ export default function AnalyticsPage() {
 
   // ── Equity curve (aggregated) ──
   const chartFunding = isUnfiltered ? dailyFunding : undefined;
-  const equityChart = useMemo(() => prepareEquityChartData(filtered, equityAgg, chartFunding), [filtered, equityAgg, chartFunding]);
+  const equityChart = useMemo(() => {
+    const chart = prepareEquityChartData(filtered, equityAgg, chartFunding);
+    // When unfiltered, adjust so final value matches pnlSummary.net_pnl exactly.
+    if (!isUnfiltered || !pnlSummary || chart.points.length === 0) return chart;
+    const pts = chart.points;
+    const rawFinal = pts[pts.length - 1].y;
+    const target = parseFloat(pnlSummary.net_pnl.toFixed(2));
+    const adj = target - rawFinal;
+    if (Math.abs(adj) < 0.005) return chart;
+    const n = pts.length;
+    const adjusted = pts.map((p, i) => ({
+      ...p,
+      y: parseFloat((p.y + adj * ((i + 1) / n)).toFixed(2)),
+    }));
+    return { ...chart, points: adjusted };
+  }, [filtered, equityAgg, chartFunding, isUnfiltered, pnlSummary]);
   const equityData = equityChart.points;
   const equityFinal = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
   const equityIsProfit = equityFinal >= 0;
