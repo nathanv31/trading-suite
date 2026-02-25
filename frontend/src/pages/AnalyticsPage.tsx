@@ -134,12 +134,16 @@ export default function AnalyticsPage() {
   const stats = useMemo(() => filtered.length > 0 ? computeStats(filtered) : null, [filtered]);
   const sorted = useMemo(() => [...filtered].sort((a, b) => a.open_time - b.open_time), [filtered]);
 
+  // Use funding-inclusive pnlSummary when filters don't actually remove any trades
+  // (e.g. filtering by BTC when the wallet only has BTC trades).
+  const allTradesShown = filtered.length === trades.length;
+
   // ── Equity curve (aggregated) ──
-  const chartFunding = isUnfiltered ? dailyFunding : undefined;
+  const chartFunding = allTradesShown ? dailyFunding : undefined;
   const equityChart = useMemo(() => {
     const chart = prepareEquityChartData(filtered, equityAgg, chartFunding);
-    // When unfiltered, adjust so final value matches pnlSummary.net_pnl exactly.
-    if (!isUnfiltered || !pnlSummary || chart.points.length === 0) return chart;
+    // When all trades shown, adjust so final value matches pnlSummary.net_pnl exactly.
+    if (!allTradesShown || !pnlSummary || chart.points.length === 0) return chart;
     const pts = chart.points;
     const rawFinal = pts[pts.length - 1].y;
     const target = parseFloat(pnlSummary.net_pnl.toFixed(2));
@@ -151,7 +155,7 @@ export default function AnalyticsPage() {
       y: parseFloat((p.y + adj * ((i + 1) / n)).toFixed(2)),
     }));
     return { ...chart, points: adjusted };
-  }, [filtered, equityAgg, chartFunding, isUnfiltered, pnlSummary]);
+  }, [filtered, equityAgg, chartFunding, allTradesShown, pnlSummary]);
   const equityData = equityChart.points;
   const equityFinal = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
   const equityIsProfit = equityFinal >= 0;
@@ -286,8 +290,8 @@ export default function AnalyticsPage() {
     return <div className="p-6 secondary-text">No trades match the current filters.</div>;
   }
 
-  const displayNetPnl = (isUnfiltered && pnlSummary) ? pnlSummary.net_pnl : stats.netPnl;
-  const fundingSub = (isUnfiltered && pnlSummary?.total_funding !== null && pnlSummary?.total_funding !== undefined)
+  const displayNetPnl = (allTradesShown && pnlSummary) ? pnlSummary.net_pnl : stats.netPnl;
+  const fundingSub = (allTradesShown && pnlSummary?.total_funding !== null && pnlSummary?.total_funding !== undefined)
     ? `Funding ${formatPnl(pnlSummary.total_funding)}`
     : `Realized ${formatCurrency(stats.realizedPnl)}`;
 
