@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement,
   BarElement, ArcElement, TimeScale, Filler, Tooltip, Legend,
@@ -10,17 +10,60 @@ import { useWallet } from '../context/WalletContext';
 import { computeStats } from '../utils/tradeStats';
 import { formatHold, formatCurrency, formatPnl } from '../utils/formatters';
 import { getPnlSummary } from '../api/client';
+import {
+  COLORS, CHART_GRID, CHART_TICKS,
+  aggregateEquityData, aggregateDrawdownData,
+  prepareEquityChartData, perTradeScaleOverrides,
+  lineChartOptions, barChartOptions, lineDatasetDefaults,
+  createGradient, tooltipConfig,
+  barColors as makeBarColors, barBorderColors, barHoverColors,
+  type AggregationLevel,
+} from '../utils/chartConfig';
 import TagFilter from '../components/TagFilter';
 import DateFilter from '../components/DateFilter';
 import type { PnlSummary } from '../types';
 
-
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, TimeScale, Filler, Tooltip, Legend);
 
-const CHART_GRID = { color: '#3e3e42' };
-const CHART_TICKS = { color: '#858585', font: { family: 'JetBrains Mono', size: 10 } };
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+const AGG_OPTIONS: { value: AggregationLevel; label: string }[] = [
+  { value: 'trade', label: 'Per Trade' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+];
+
+// Shared enhanced bar dataset builder
+function enhancedBarDataset(data: number[], extraRadius = 6) {
+  return {
+    data,
+    backgroundColor: makeBarColors(data),
+    borderColor: barBorderColors(data),
+    hoverBackgroundColor: barHoverColors(data),
+    hoverBorderColor: barBorderColors(data),
+    hoverBorderWidth: 2,
+    borderWidth: 1,
+    borderRadius: extraRadius,
+    borderSkipped: false as const,
+  };
+}
+
+// Shared enhanced bar options
+function enhancedBarOpts(tooltipLabelCb?: (item: any) => string) {
+  return barChartOptions({
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        ...tooltipConfig,
+        mode: 'index' as const,
+        intersect: false,
+        callbacks: tooltipLabelCb ? { label: tooltipLabelCb } : undefined,
+      },
+    },
+  });
+}
 
 export default function AnalyticsPage() {
   const { trades, loading, error, refreshTrades, tagMap, allTags } = useTrades();
@@ -34,6 +77,10 @@ export default function AnalyticsPage() {
   const [dateTo, setDateTo] = useState('');
   const [dateGroupBy, setDateGroupBy] = useState<'open' | 'close'>('open');
   const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
+  const [equityAgg, setEquityAgg] = useState<AggregationLevel>('daily');
+  const [ddAgg, setDdAgg] = useState<AggregationLevel>('daily');
+  const equityChartRef = useRef<ChartJS<'line'> | null>(null) as any;
+  const ddChartRef = useRef<ChartJS<'line'> | null>(null) as any;
 
   const isUnfiltered = !sideFilter && !resultFilter && !coinFilter && selectedTags.size === 0 && !dateFrom && !dateTo;
 
@@ -48,7 +95,6 @@ export default function AnalyticsPage() {
   const filtered = useMemo(() => {
     let list = [...trades];
 
-    // Date range filter
     if (dateFrom) {
       const fromTs = new Date(dateFrom + 'T00:00:00').getTime();
       list = list.filter(t => {
@@ -69,7 +115,6 @@ export default function AnalyticsPage() {
     if (resultFilter === 'loss') list = list.filter(t => (t.pnl - t.fees) < 0);
     if (coinFilter) list = list.filter(t => t.coin === coinFilter);
 
-    // Tag filter
     if (selectedTags.size > 0) {
       list = list.filter(t => {
         const tradeTags = tagMap[String(t.id)] || [];
@@ -85,30 +130,32 @@ export default function AnalyticsPage() {
   }, [trades, sideFilter, resultFilter, coinFilter, selectedTags, tagLogic, tagMap, dateFrom, dateTo, dateGroupBy]);
 
   const stats = useMemo(() => filtered.length > 0 ? computeStats(filtered) : null, [filtered]);
-
-  // Chart data
   const sorted = useMemo(() => [...filtered].sort((a, b) => a.open_time - b.open_time), [filtered]);
 
-  // Equity curve
-  const equityData = useMemo(() => {
-    let cum = 0;
-    return sorted.map(t => { cum += t.pnl - t.fees; return { x: new Date(t.open_time), y: parseFloat(cum.toFixed(2)) }; });
-  }, [sorted]);
+  // ── Equity curve (aggregated) ──
+  const equityChart = useMemo(() => prepareEquityChartData(filtered, equityAgg), [filtered, equityAgg]);
+  const equityData = equityChart.points;
+  const equityFinal = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
+  const equityIsProfit = equityFinal >= 0;
+  const equityColor = equityIsProfit ? COLORS.profit : COLORS.loss;
+  const equityColorRgb = equityIsProfit ? COLORS.profitRgb : COLORS.lossRgb;
 
-  // Drawdown
+  // ── Drawdown (aggregated) ──
+  const ddChart = useMemo(() => prepareEquityChartData(filtered, ddAgg), [filtered, ddAgg]);
+  const drawdownRaw = useMemo(() => aggregateDrawdownData(aggregateEquityData(filtered, ddAgg)), [filtered, ddAgg]);
   const drawdownData = useMemo(() => {
-    let pk = 0;
-    return equityData.map(p => { if (p.y > pk) pk = p.y; return { x: p.x, y: pk > 0 ? parseFloat(((p.y - pk) / pk * 100).toFixed(2)) : 0 }; });
-  }, [equityData]);
+    if (!ddChart.isPerTrade) return drawdownRaw;
+    return drawdownRaw.map((p, i) => ({ x: i, y: p.y }));
+  }, [drawdownRaw, ddChart.isPerTrade]);
 
-  // Day of week
+  // ── Day of week ──
   const dowData = useMemo(() => {
     const pnl = [0, 0, 0, 0, 0, 0, 0];
     filtered.forEach(t => pnl[new Date(t.open_time).getDay()] += t.pnl - t.fees);
     return { labels: DOW_ORDER.map(i => DAYS[i]), data: DOW_ORDER.map(i => parseFloat(pnl[i].toFixed(2))) };
   }, [filtered]);
 
-  // Time of day
+  // ── Time of day ──
   const todData = useMemo(() => {
     const labels = ['00-04', '04-08', '08-12', '12-16', '16-20', '20-24'];
     const pnl = [0, 0, 0, 0, 0, 0];
@@ -116,7 +163,7 @@ export default function AnalyticsPage() {
     return { labels, data: pnl.map(v => parseFloat(v.toFixed(2))) };
   }, [filtered]);
 
-  // Hold time buckets
+  // ── Hold time buckets ──
   const holdData = useMemo(() => {
     const buckets: Record<string, number> = { '<1m': 0, '1-5m': 0, '5-30m': 0, '30m-4h': 0, '4h-1d': 0, '>1d': 0 };
     filtered.forEach(t => {
@@ -132,7 +179,7 @@ export default function AnalyticsPage() {
     return { labels: Object.keys(buckets), data: Object.values(buckets).map(v => parseFloat(v.toFixed(2))) };
   }, [filtered]);
 
-  // Coin PnL
+  // ── Coin PnL ──
   const coinData = useMemo(() => {
     const map: Record<string, number> = {};
     filtered.forEach(t => { map[t.coin] = (map[t.coin] || 0) + t.pnl - t.fees; });
@@ -140,7 +187,7 @@ export default function AnalyticsPage() {
     return { labels: entries.map(e => e[0]), data: entries.map(e => parseFloat(e[1].toFixed(2))) };
   }, [filtered]);
 
-  // Streak
+  // ── Streak ──
   const streakData = useMemo(() => {
     let sk = 0;
     return sorted.map((t, i) => {
@@ -154,6 +201,50 @@ export default function AnalyticsPage() {
       return { x: new Date(t.open_time), y: sk };
     });
   }, [sorted]);
+
+  // ── Distribution ──
+  const distData = useMemo(() => {
+    const pnls = filtered.map(t => t.pnl - t.fees);
+    if (!pnls.length) return { labels: [] as string[], data: [] as number[], colors: [] as string[] };
+    const minP = Math.min(...pnls), maxP = Math.max(...pnls);
+    const bc = 12, bs = (maxP - minP) / bc || 1;
+    const db = Array(bc).fill(0) as number[];
+    pnls.forEach(p => { const i = Math.min(Math.floor((p - minP) / bs), bc - 1); db[i]++; });
+    const dl = db.map((_, i) => `$${(minP + i * bs).toFixed(0)}`);
+    const dc = dl.map(l => parseFloat(l.slice(1)) >= 0 ? `rgba(${COLORS.profitRgb},0.75)` : `rgba(${COLORS.lossRgb},0.75)`);
+    return { labels: dl, data: db, colors: dc };
+  }, [filtered]);
+
+  // ── Gradient callback for equity ──
+  const getEquityGradient = useCallback(() => {
+    const chart = equityChartRef.current;
+    if (!chart?.chartArea) return `rgba(${equityColorRgb},0.1)`;
+    return createGradient(chart.ctx, chart.chartArea, equityColorRgb, 0.25, 0);
+  }, [equityColorRgb]);
+
+  // ── Gradient callback for drawdown ──
+  const getDdGradient = useCallback(() => {
+    const chart = ddChartRef.current;
+    if (!chart?.chartArea) return `rgba(${COLORS.lossRgb},0.12)`;
+    return createGradient(chart.ctx, chart.chartArea, COLORS.lossRgb, 0.22, 0);
+  }, []);
+
+  // ── Update gradients on data change ──
+  useEffect(() => {
+    const chart = equityChartRef.current;
+    if (chart?.chartArea && chart.data.datasets[0]) {
+      chart.data.datasets[0].backgroundColor = createGradient(chart.ctx, chart.chartArea, equityColorRgb, 0.25, 0);
+      chart.update('none');
+    }
+  }, [equityData, equityColorRgb]);
+
+  useEffect(() => {
+    const chart = ddChartRef.current;
+    if (chart?.chartArea && chart.data.datasets[0]) {
+      chart.data.datasets[0].backgroundColor = createGradient(chart.ctx, chart.chartArea, COLORS.lossRgb, 0.22, 0);
+      chart.update('none');
+    }
+  }, [drawdownData]);
 
   if (loading) {
     return <div className="flex items-center justify-center" style={{ height: 200 }}><div className="spinner" /></div>;
@@ -177,15 +268,6 @@ export default function AnalyticsPage() {
     return <div className="p-6 secondary-text">No trades match the current filters.</div>;
   }
 
-  const barColors = (data: number[]) => data.map(v => v >= 0 ? 'rgba(78,201,176,0.7)' : 'rgba(244,135,113,0.7)');
-  const barBorders = (data: number[]) => data.map(v => v >= 0 ? '#4ec9b0' : '#f48771');
-
-  const barOpts = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: { x: { grid: CHART_GRID, ticks: CHART_TICKS }, y: { grid: CHART_GRID, ticks: CHART_TICKS } },
-  };
-
   const displayNetPnl = (isUnfiltered && pnlSummary) ? pnlSummary.net_pnl : stats.netPnl;
   const fundingSub = (isUnfiltered && pnlSummary?.total_funding !== null && pnlSummary?.total_funding !== undefined)
     ? `Funding ${formatPnl(pnlSummary.total_funding)}`
@@ -204,7 +286,9 @@ export default function AnalyticsPage() {
     { label: 'Expectancy', value: formatCurrency(stats.expectancy), cls: stats.expectancy >= 0 ? 'profit-text' : 'loss-text', sub: 'per trade' },
   ];
 
-  const cumColor = (equityData[equityData.length - 1]?.y ?? 0) >= 0 ? '#4ec9b0' : '#f48771';
+  // Tooltip label for PnL values
+  const pnlTooltipLabel = (item: any) => `  P&L: ${formatCurrency(item.parsed.y)}`;
+  const countTooltipLabel = (item: any) => `  Trades: ${item.parsed.y}`;
 
   return (
     <div className="p-6">
@@ -256,116 +340,349 @@ export default function AnalyticsPage() {
 
       {/* Charts */}
       <div className="an-module-grid">
-        {/* Equity Curve */}
+        {/* ── Equity Curve ── */}
         <div className="an-module span2">
-          <div className="an-module-header"><span className="an-chart-title">Cumulative P&L</span></div>
-          <div style={{ height: 200 }}>
-            <Line data={{ datasets: [{ data: equityData, borderColor: cumColor, backgroundColor: cumColor === '#4ec9b0' ? 'rgba(78,201,176,0.08)' : 'rgba(244,135,113,0.08)', fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0 }] }}
-              options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { type: 'time', grid: CHART_GRID, ticks: CHART_TICKS }, y: { grid: CHART_GRID, ticks: CHART_TICKS } } }} />
+          <div className="an-module-header">
+            <span className="an-chart-title">Cumulative P&L</span>
+            <div className="chart-agg-toggle">
+              {AGG_OPTIONS.map(opt => (
+                <button key={opt.value} className={`chart-agg-btn${equityAgg === opt.value ? ' active' : ''}`} onClick={() => setEquityAgg(opt.value)}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ height: 220 }}>
+            <Line
+              ref={equityChartRef}
+              data={{
+                datasets: [{
+                  data: equityData as any,
+                  ...lineDatasetDefaults(equityColor, equityColorRgb, equityChart.isPerTrade),
+                  backgroundColor: getEquityGradient(),
+                }],
+              }}
+              options={lineChartOptions({
+                ...(equityChart.isPerTrade ? perTradeScaleOverrides(equityChart.tradeDates.length) : {}),
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    ...tooltipConfig,
+                    mode: 'index' as const,
+                    intersect: false,
+                    callbacks: {
+                      title: (items) => {
+                        if (!items.length) return '';
+                        if (equityChart.isPerTrade) {
+                          const idx = Math.round(items[0].parsed.x ?? 0);
+                          const date = equityChart.tradeDates[idx];
+                          const dateStr = date ? date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+                          return `Trade #${idx + 1} \u2014 ${dateStr}`;
+                        }
+                        const d = new Date(items[0].parsed.x ?? 0);
+                        if (equityAgg === 'monthly') return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+                        if (equityAgg === 'weekly') return `Week of ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+                        return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+                      },
+                      label: (item) => `  Cumulative: ${formatCurrency(item.parsed.y ?? 0)}`,
+                    },
+                  },
+                },
+              })}
+            />
           </div>
         </div>
 
-        {/* Drawdown */}
+        {/* ── Drawdown ── */}
         <div className="an-module">
-          <div className="an-module-header"><span className="an-chart-title">Drawdown</span></div>
-          <div style={{ height: 200 }}>
-            <Line data={{ datasets: [{ data: drawdownData, borderColor: '#f48771', backgroundColor: 'rgba(244,135,113,0.15)', fill: true, tension: 0.3, borderWidth: 1.5, pointRadius: 0 }] }}
-              options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { type: 'time', grid: CHART_GRID, ticks: CHART_TICKS }, y: { grid: CHART_GRID, ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' } } } }} />
+          <div className="an-module-header">
+            <span className="an-chart-title">Drawdown</span>
+            <div className="chart-agg-toggle sm">
+              {AGG_OPTIONS.map(opt => (
+                <button key={opt.value} className={`chart-agg-btn${ddAgg === opt.value ? ' active' : ''}`} onClick={() => setDdAgg(opt.value)}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ height: 220 }}>
+            <Line
+              ref={ddChartRef}
+              data={{
+                datasets: [{
+                  data: drawdownData as any,
+                  ...lineDatasetDefaults(COLORS.loss, COLORS.lossRgb, ddChart.isPerTrade),
+                  borderWidth: 2,
+                  backgroundColor: getDdGradient(),
+                }],
+              }}
+              options={lineChartOptions({
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    ...tooltipConfig,
+                    mode: 'index' as const,
+                    intersect: false,
+                    callbacks: {
+                      title: ddChart.isPerTrade ? (items) => {
+                        if (!items.length) return '';
+                        const idx = Math.round(items[0].parsed.x ?? 0);
+                        const date = ddChart.tradeDates[idx];
+                        const dateStr = date ? date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+                        return `Trade #${idx + 1} \u2014 ${dateStr}`;
+                      } : undefined,
+                      label: (item) => `  Drawdown: ${(item.parsed.y ?? 0).toFixed(2)}%`,
+                    },
+                  },
+                },
+                scales: ddChart.isPerTrade
+                  ? {
+                      ...perTradeScaleOverrides(ddChart.tradeDates.length).scales,
+                      y: {
+                        grid: CHART_GRID,
+                        ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' },
+                        border: { display: false },
+                      },
+                    }
+                  : {
+                      x: {
+                        type: 'time',
+                        grid: { ...CHART_GRID, display: false },
+                        ticks: CHART_TICKS,
+                        border: { display: false },
+                      },
+                      y: {
+                        grid: CHART_GRID,
+                        ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' },
+                        border: { display: false },
+                      },
+                    },
+              })}
+            />
           </div>
         </div>
 
-        {/* Day of Week */}
+        {/* ── Day of Week ── */}
         <div className="an-module">
           <div className="an-module-header"><span className="an-chart-title">P&L by Day of Week</span></div>
           <div style={{ height: 200 }}>
-            <Bar data={{ labels: dowData.labels, datasets: [{ data: dowData.data, backgroundColor: barColors(dowData.data), borderColor: barBorders(dowData.data), borderWidth: 1, borderRadius: 4 }] }}
-              options={barOpts as any} />
+            <Bar
+              data={{ labels: dowData.labels, datasets: [enhancedBarDataset(dowData.data)] }}
+              options={enhancedBarOpts(pnlTooltipLabel) as any}
+            />
           </div>
         </div>
 
-        {/* Time of Day */}
+        {/* ── Time of Day ── */}
         <div className="an-module">
           <div className="an-module-header"><span className="an-chart-title">P&L by Time of Day</span></div>
           <div style={{ height: 200 }}>
-            <Bar data={{ labels: todData.labels, datasets: [{ data: todData.data, backgroundColor: barColors(todData.data), borderColor: barBorders(todData.data), borderWidth: 1, borderRadius: 4 }] }}
-              options={barOpts as any} />
+            <Bar
+              data={{ labels: todData.labels, datasets: [enhancedBarDataset(todData.data)] }}
+              options={enhancedBarOpts(pnlTooltipLabel) as any}
+            />
           </div>
         </div>
 
-        {/* Hold Time */}
+        {/* ── Hold Time ── */}
         <div className="an-module">
           <div className="an-module-header"><span className="an-chart-title">P&L by Hold Time</span></div>
           <div style={{ height: 200 }}>
-            <Bar data={{ labels: holdData.labels, datasets: [{ data: holdData.data, backgroundColor: barColors(holdData.data), borderColor: barBorders(holdData.data), borderWidth: 1, borderRadius: 4 }] }}
-              options={barOpts as any} />
+            <Bar
+              data={{ labels: holdData.labels, datasets: [enhancedBarDataset(holdData.data)] }}
+              options={enhancedBarOpts(pnlTooltipLabel) as any}
+            />
           </div>
         </div>
 
-        {/* Coin PnL */}
+        {/* ── Coin PnL ── */}
         <div className="an-module span2">
           <div className="an-module-header"><span className="an-chart-title">P&L by Asset</span></div>
           <div style={{ height: 200 }}>
-            <Bar data={{ labels: coinData.labels, datasets: [{ data: coinData.data, backgroundColor: barColors(coinData.data), borderColor: barBorders(coinData.data), borderWidth: 1, borderRadius: 4 }] }}
-              options={barOpts as any} />
+            <Bar
+              data={{ labels: coinData.labels, datasets: [enhancedBarDataset(coinData.data)] }}
+              options={enhancedBarOpts(pnlTooltipLabel) as any}
+            />
           </div>
         </div>
 
-        {/* Long vs Short */}
+        {/* ── Long vs Short ── */}
         <div className="an-module">
           <div className="an-module-header"><span className="an-chart-title">Long vs Short</span></div>
           <div style={{ height: 200 }}>
-            <Doughnut data={{ labels: [`Long (${stats.longCount})`, `Short (${stats.shortCount})`], datasets: [{ data: [stats.longCount, stats.shortCount], backgroundColor: ['rgba(78,201,176,0.75)', 'rgba(244,135,113,0.75)'], borderWidth: 0 }] }}
-              options={{ responsive: true, maintainAspectRatio: false, cutout: '60%', plugins: { legend: { display: true, position: 'bottom', labels: { color: '#858585', font: { family: 'JetBrains Mono', size: 10 }, padding: 8 } } } }} />
+            <Doughnut
+              data={{
+                labels: [`Long (${stats.longCount})`, `Short (${stats.shortCount})`],
+                datasets: [{
+                  data: [stats.longCount, stats.shortCount],
+                  backgroundColor: [`rgba(${COLORS.profitRgb},0.75)`, `rgba(${COLORS.lossRgb},0.75)`],
+                  hoverBackgroundColor: [COLORS.profit, COLORS.loss],
+                  borderWidth: 0,
+                  spacing: 3,
+                }],
+              }}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '65%',
+                animation: { animateRotate: true, animateScale: true },
+                plugins: {
+                  legend: {
+                    display: true,
+                    position: 'bottom',
+                    labels: { color: COLORS.textMuted, font: { family: 'JetBrains Mono', size: 10 }, padding: 10, usePointStyle: true, pointStyleWidth: 8 },
+                  },
+                  tooltip: {
+                    ...tooltipConfig,
+                    callbacks: {
+                      label: (item) => {
+                        const total = (item.dataset.data as number[]).reduce((a, b) => a + b, 0);
+                        const pct = total > 0 ? ((item.raw as number) / total * 100).toFixed(1) : '0';
+                        return `  ${item.label}: ${item.raw} (${pct}%)`;
+                      },
+                    },
+                  },
+                },
+              }}
+            />
           </div>
         </div>
 
-        {/* Distribution */}
+        {/* ── Distribution ── */}
         <div className="an-module">
           <div className="an-module-header"><span className="an-chart-title">P&L Distribution</span></div>
           <div style={{ height: 200 }}>
-            {(() => {
-              const pnls = filtered.map(t => t.pnl - t.fees);
-              const minP = Math.min(...pnls), maxP = Math.max(...pnls);
-              const bc = 12, bs = (maxP - minP) / bc || 1;
-              const db = Array(bc).fill(0);
-              pnls.forEach(p => { const i = Math.min(Math.floor((p - minP) / bs), bc - 1); db[i]++; });
-              const dl = db.map((_, i) => `$${(minP + i * bs).toFixed(0)}`);
-              const dc = dl.map(l => parseFloat(l.slice(1)) >= 0 ? 'rgba(78,201,176,0.7)' : 'rgba(244,135,113,0.7)');
-              return <Bar data={{ labels: dl, datasets: [{ data: db, backgroundColor: dc, borderWidth: 0, borderRadius: 3 }] }} options={barOpts as any} />;
-            })()}
+            <Bar
+              data={{
+                labels: distData.labels,
+                datasets: [{
+                  data: distData.data,
+                  backgroundColor: distData.colors,
+                  hoverBackgroundColor: distData.colors.map(c => c.replace(/0\.75/, '0.95')),
+                  borderWidth: 0,
+                  borderRadius: 4,
+                  borderSkipped: false,
+                }],
+              }}
+              options={enhancedBarOpts(countTooltipLabel) as any}
+            />
           </div>
         </div>
 
-        {/* Streak */}
+        {/* ── Streak ── */}
         <div className="an-module">
           <div className="an-module-header"><span className="an-chart-title">Win / Loss Streak</span></div>
           <div style={{ height: 200 }}>
-            <Bar data={{ datasets: [{ data: streakData, backgroundColor: streakData.map(d => d.y > 0 ? 'rgba(78,201,176,0.7)' : 'rgba(244,135,113,0.7)'), borderWidth: 0, borderRadius: 2 }] }}
-              options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { type: 'time', grid: CHART_GRID, ticks: CHART_TICKS }, y: { grid: CHART_GRID, ticks: CHART_TICKS } } } as any} />
+            <Bar
+              data={{
+                datasets: [{
+                  data: streakData,
+                  backgroundColor: streakData.map(d => d.y > 0 ? `rgba(${COLORS.profitRgb},0.75)` : `rgba(${COLORS.lossRgb},0.75)`),
+                  hoverBackgroundColor: streakData.map(d => d.y > 0 ? COLORS.profit : COLORS.loss),
+                  borderWidth: 0,
+                  borderRadius: 3,
+                  borderSkipped: false,
+                }],
+              }}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    ...tooltipConfig,
+                    callbacks: {
+                      title: (items: any[]) => {
+                        if (!items.length) return '';
+                        return new Date(items[0].parsed.x).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                      },
+                      label: (item: any) => {
+                        const v = item.parsed.y;
+                        return `  Streak: ${v > 0 ? '+' : ''}${v} ${v > 0 ? 'wins' : 'losses'}`;
+                      },
+                    },
+                  },
+                },
+                scales: {
+                  x: { type: 'time', grid: { ...CHART_GRID, display: false }, ticks: CHART_TICKS, border: { display: false } },
+                  y: { grid: CHART_GRID, ticks: CHART_TICKS, border: { display: false } },
+                },
+              } as any}
+            />
           </div>
         </div>
 
-        {/* MAE vs MFE */}
+        {/* ── MAE vs MFE ── */}
         <div className="an-module">
           <div className="an-module-header"><span className="an-chart-title">MAE vs MFE</span></div>
           <div style={{ height: 200 }}>
-            <Scatter data={{
-              datasets: [
-                { label: 'Win', data: filtered.filter(t => (t.pnl - t.fees) > 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(78,201,176,0.6)', pointRadius: 4 },
-                { label: 'Loss', data: filtered.filter(t => (t.pnl - t.fees) < 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })), backgroundColor: 'rgba(244,135,113,0.6)', pointRadius: 4 },
-              ]
-            }} options={{
-              responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { display: true, position: 'bottom', labels: { color: '#858585', font: { family: 'JetBrains Mono', size: 10 }, padding: 8 } } },
-              scales: {
-                x: { grid: CHART_GRID, ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' }, title: { display: true, text: 'MAE %', color: '#858585', font: { size: 10 } } },
-                y: { grid: CHART_GRID, ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' }, title: { display: true, text: 'MFE %', color: '#858585', font: { size: 10 } } },
-              },
-            } as any} />
+            <Scatter
+              data={{
+                datasets: [
+                  {
+                    label: 'Win',
+                    data: filtered.filter(t => (t.pnl - t.fees) > 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })),
+                    backgroundColor: `rgba(${COLORS.profitRgb},0.5)`,
+                    hoverBackgroundColor: COLORS.profit,
+                    pointRadius: 5,
+                    pointHoverRadius: 7,
+                    pointBorderWidth: 1,
+                    pointBorderColor: `rgba(${COLORS.profitRgb},0.8)`,
+                    pointHoverBorderColor: COLORS.profit,
+                    pointHoverBorderWidth: 2,
+                  },
+                  {
+                    label: 'Loss',
+                    data: filtered.filter(t => (t.pnl - t.fees) < 0).map(t => ({ x: (t.mae || 0) * 100, y: (t.mfe || 0) * 100 })),
+                    backgroundColor: `rgba(${COLORS.lossRgb},0.5)`,
+                    hoverBackgroundColor: COLORS.loss,
+                    pointRadius: 5,
+                    pointHoverRadius: 7,
+                    pointBorderWidth: 1,
+                    pointBorderColor: `rgba(${COLORS.lossRgb},0.8)`,
+                    pointHoverBorderColor: COLORS.loss,
+                    pointHoverBorderWidth: 2,
+                  },
+                ],
+              }}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'point', intersect: true },
+                plugins: {
+                  legend: {
+                    display: true,
+                    position: 'bottom',
+                    labels: { color: COLORS.textMuted, font: { family: 'JetBrains Mono', size: 10 }, padding: 10, usePointStyle: true, pointStyleWidth: 8 },
+                  },
+                  tooltip: {
+                    ...tooltipConfig,
+                    callbacks: {
+                      label: (item: any) => `  MAE: ${item.parsed.x.toFixed(2)}%  MFE: ${item.parsed.y.toFixed(2)}%`,
+                    },
+                  },
+                },
+                scales: {
+                  x: {
+                    grid: CHART_GRID,
+                    ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' },
+                    title: { display: true, text: 'MAE %', color: COLORS.textMuted, font: { size: 10 } },
+                    border: { display: false },
+                  },
+                  y: {
+                    grid: CHART_GRID,
+                    ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' },
+                    title: { display: true, text: 'MFE %', color: COLORS.textMuted, font: { size: 10 } },
+                    border: { display: false },
+                  },
+                },
+              } as any}
+            />
           </div>
         </div>
 
-        {/* Full Statistics Table */}
+        {/* ── Full Statistics Table ── */}
         <div className="an-module span3">
           <div className="an-module-header"><span className="an-chart-title">Full Statistics</span></div>
           <div className="an-stats-table">
