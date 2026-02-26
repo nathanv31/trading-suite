@@ -3,6 +3,7 @@ import type { Trade } from '../../types';
 import { formatHold, formatPrice, formatPnl, formatDateTime } from '../../utils/formatters';
 import { getTradeNotes, saveTradeNotes, getTradeTags, addTradeTag, removeTradeTag, getTradeFunding } from '../../api/client';
 import { useTrades } from '../../context/TradeContext';
+import ScreenshotGallery from './ScreenshotGallery';
 import { useWallet } from '../../context/WalletContext';
 
 interface Props {
@@ -234,6 +235,7 @@ export default function JournalRow({ trade }: Props) {
                   </div>
                 )}
               </div>
+              <ScreenshotGallery tradeId={trade.id} expanded={expanded} />
             </div>
           </div>
         </div>

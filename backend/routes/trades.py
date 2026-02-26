@@ -5,7 +5,7 @@ import time
 from flask import Blueprint, request, jsonify
 from db import get_db
 from hl_client import HyperliquidClient
-from trade_processor import process_fills_to_trades
+from trade_processor import process_fills_to_trades, enrich_trades_with_candles
 trades_bp = Blueprint("trades", __name__)
 hl = HyperliquidClient()
 
@@ -134,6 +134,12 @@ def _fetch_and_process(wallet):
     print(f"[TRADES] Processing fills into trades...")
     trades = process_fills_to_trades(fills)
     print(f"[TRADES] Found {len(trades)} round-trip trades")
+
+    print(f"[TRADES] Enriching MFE/MAE with candle data...")
+    try:
+        trades = enrich_trades_with_candles(trades, hl.fetch_candles)
+    except Exception as e:
+        print(f"[TRADES] Candle enrichment failed, using fill-based MFE/MAE: {e}")
 
     _cache_trades(wallet, trades)
     return trades

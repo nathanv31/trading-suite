@@ -91,6 +91,8 @@ def _process_coin_fills(coin, fills):
                 current["fill_ids"].append(tid)
                 current["max_px"] = max(current["max_px"], px)
                 current["min_px"] = min(current["min_px"], px)
+                current["exit_value"] += px * sz
+                current["exit_size"] += sz
                 current["last_px"] = px
                 current["last_time"] = f["time"]
 
@@ -118,6 +120,8 @@ def _process_coin_fills(coin, fills):
                 current["fill_ids"].append(tid)
                 if closed_pnl != 0:
                     current["realized_pnl"] += closed_pnl
+                    current["exit_value"] += px * sz
+                    current["exit_size"] += sz
                 current["max_px"] = max(current["max_px"], px)
                 current["min_px"] = min(current["min_px"], px)
                 current["last_px"] = px
@@ -148,6 +152,8 @@ def _new_trade(coin, fill, px, sz, fee, tid):
         "last_px": px,
         "max_px": px,
         "min_px": px,
+        "exit_value": 0.0,
+        "exit_size": 0.0,
         "fill_ids": [tid],
         "orphan": False,
     }
@@ -159,7 +165,7 @@ def _finalize_trade(t):
         return None
 
     avg_entry = t["entry_value"] / t["entry_size"] if t["entry_size"] > 0 else t["last_px"]
-    exit_px = t["last_px"]
+    exit_px = t["exit_value"] / t["exit_size"] if t["exit_size"] > 0 else t["last_px"]
     is_long = t["side"] == "B"
 
     # MAE: max adverse excursion (worst price vs entry)
@@ -195,3 +201,134 @@ def _finalize_trade(t):
         "mfe": round(mfe, 6),
         "fill_ids": json.dumps(t["fill_ids"]),
     }
+
+
+def _fetch_candles_paginated(candle_fetcher, coin, interval, start, end):
+    """Fetch candles with pagination (HL returns max 500 per request)."""
+    all_candles = []
+    cursor = start
+    while cursor < end:
+        batch = candle_fetcher(coin, interval, cursor, end)
+        if not batch:
+            break
+        all_candles.extend(batch)
+        if len(batch) < 500:
+            break
+        # Move cursor past the last candle's close time
+        cursor = int(batch[-1]["T"])
+    return all_candles
+
+
+def _parse_candles(candles):
+    """Parse raw candle dicts into sorted (start_time, high, low) tuples."""
+    parsed = []
+    for c in candles:
+        try:
+            parsed.append((int(c["t"]), float(c["h"]), float(c["l"])))
+        except (KeyError, ValueError):
+            continue
+    parsed.sort(key=lambda x: x[0])
+    return parsed
+
+
+def _extract_high_low(parsed_candles, open_time, close_time):
+    """Extract the overall high and low from candles within a time window."""
+    trade_high = 0.0
+    trade_low = float("inf")
+    found = False
+    for ct, ch, cl in parsed_candles:
+        if ct + 60000 < open_time:
+            continue
+        if ct > close_time:
+            break
+        trade_high = max(trade_high, ch)
+        trade_low = min(trade_low, cl)
+        found = True
+    return trade_high, trade_low, found
+
+
+def enrich_trades_with_candles(trades, candle_fetcher):
+    """Enrich MFE/MAE using actual candle highs/lows instead of fill prices only.
+
+    Groups consecutive trades on the same coin into time-bounded batches
+    (<=500 minutes each) to minimize API calls while staying within the
+    Hyperliquid 500-candle-per-request limit.
+
+    Args:
+        trades: List of finalized trade dicts from process_fills_to_trades().
+        candle_fetcher: Callable(coin, interval, start_time, end_time) -> list of candle dicts.
+
+    Returns:
+        The same trades list with mae/mfe updated in place.
+    """
+    if not trades:
+        return trades
+
+    # Group trades by coin
+    by_coin = {}
+    for t in trades:
+        coin = t["coin"]
+        if coin not in by_coin:
+            by_coin[coin] = []
+        by_coin[coin].append(t)
+
+    max_batch_ms = 500 * 60 * 1000  # 500 minutes in ms (fits in one 1m candle request)
+
+    for coin, coin_trades in by_coin.items():
+        # Sort by open_time to enable batching
+        coin_trades.sort(key=lambda t: t["open_time"])
+
+        # Build batches of trades whose combined time span fits in one API call
+        batches = []
+        batch_start = coin_trades[0]["open_time"]
+        batch = [coin_trades[0]]
+
+        for t in coin_trades[1:]:
+            if t["close_time"] - batch_start <= max_batch_ms:
+                batch.append(t)
+            else:
+                batches.append((batch_start, batch[-1]["close_time"], batch))
+                batch_start = t["open_time"]
+                batch = [t]
+        batches.append((batch_start, batch[-1]["close_time"], batch))
+
+        # Fetch candles per batch and enrich trades
+        for b_start, b_end, batch_trades in batches:
+            try:
+                candles = _fetch_candles_paginated(
+                    candle_fetcher, coin, "1m", b_start, b_end
+                )
+            except Exception as e:
+                print(f"[ENRICH] Failed to fetch candles for {coin}: {e}")
+                continue
+
+            if not candles:
+                continue
+
+            parsed = _parse_candles(candles)
+            if not parsed:
+                continue
+
+            for t in batch_trades:
+                entry_px = t["entry_px"]
+                if entry_px <= 0:
+                    continue
+
+                trade_high, trade_low, found = _extract_high_low(
+                    parsed, t["open_time"], t["close_time"]
+                )
+                if not found:
+                    continue
+
+                is_long = t["side"] == "B"
+                if is_long:
+                    mfe_px = trade_high
+                    mae_px = trade_low
+                else:
+                    mfe_px = trade_low
+                    mae_px = trade_high
+
+                t["mfe"] = round(abs(mfe_px - entry_px) / entry_px, 6)
+                t["mae"] = round(abs(mae_px - entry_px) / entry_px, 6)
+
+    return trades
