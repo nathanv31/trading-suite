@@ -259,16 +259,41 @@ function getDateKey(date: Date, level: AggregationLevel): string {
 
 export function aggregateEquityData(
   trades: TradeDataInput[],
-  level: AggregationLevel
+  level: AggregationLevel,
+  dailyFunding?: Record<string, number>,
 ): DataPoint[] {
   const sorted = [...trades].sort((a, b) => a.open_time - b.open_time);
 
   if (level === 'trade') {
     let cum = 0;
-    return sorted.map(t => {
+    // Sort funding entries by date so we can merge them chronologically
+    const sortedFunding = dailyFunding
+      ? Object.entries(dailyFunding).sort(([a], [b]) => a.localeCompare(b))
+      : [];
+    let fIdx = 0;
+
+    const result = sorted.map(t => {
+      const tradeDate = new Date(t.open_time).toISOString().slice(0, 10);
+      // Add funding from all days up to and including this trade's date
+      while (fIdx < sortedFunding.length && sortedFunding[fIdx][0] <= tradeDate) {
+        cum += sortedFunding[fIdx][1];
+        fIdx++;
+      }
       cum += t.pnl - t.fees;
       return { x: new Date(t.open_time), y: parseFloat(cum.toFixed(2)) };
     });
+
+    // Add any remaining funding (from days after the last trade) to the final point
+    if (result.length > 0 && fIdx < sortedFunding.length) {
+      let trailing = 0;
+      while (fIdx < sortedFunding.length) {
+        trailing += sortedFunding[fIdx][1];
+        fIdx++;
+      }
+      result[result.length - 1].y = parseFloat((result[result.length - 1].y + trailing).toFixed(2));
+    }
+
+    return result;
   }
 
   // Aggregate by time period
@@ -280,6 +305,18 @@ export function aggregateEquityData(
       buckets[key] = { date: new Date(key + (level === 'monthly' ? '-01' : '')), netPnl: 0 };
     }
     buckets[key].netPnl += t.pnl - t.fees;
+  }
+
+  // Merge daily funding into the appropriate period buckets
+  if (dailyFunding) {
+    for (const [dateStr, amount] of Object.entries(dailyFunding)) {
+      const date = new Date(dateStr + 'T00:00:00');
+      const key = getDateKey(date, level);
+      if (!buckets[key]) {
+        buckets[key] = { date: new Date(key + (level === 'monthly' ? '-01' : '')), netPnl: 0 };
+      }
+      buckets[key].netPnl += amount;
+    }
   }
 
   const sortedBuckets = Object.values(buckets).sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -298,9 +335,10 @@ export interface EquityChartData {
 
 export function prepareEquityChartData(
   trades: TradeDataInput[],
-  level: AggregationLevel
+  level: AggregationLevel,
+  dailyFunding?: Record<string, number>,
 ): EquityChartData {
-  const raw = aggregateEquityData(trades, level);
+  const raw = aggregateEquityData(trades, level, dailyFunding);
 
   if (level !== 'trade') {
     return { points: raw, tradeDates: [], isPerTrade: false };

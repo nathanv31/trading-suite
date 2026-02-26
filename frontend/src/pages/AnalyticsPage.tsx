@@ -9,7 +9,7 @@ import { useTrades } from '../context/TradeContext';
 import { useWallet } from '../context/WalletContext';
 import { computeStats } from '../utils/tradeStats';
 import { formatHold, formatCurrency, formatPnl } from '../utils/formatters';
-import { getPnlSummary } from '../api/client';
+import { getPnlSummary, getDailyFunding } from '../api/client';
 import {
   COLORS, CHART_GRID, CHART_TICKS,
   aggregateEquityData, aggregateDrawdownData,
@@ -77,6 +77,7 @@ export default function AnalyticsPage() {
   const [dateTo, setDateTo] = useState('');
   const [dateGroupBy, setDateGroupBy] = useState<'open' | 'close'>('open');
   const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
+  const [dailyFunding, setDailyFunding] = useState<Record<string, number>>({});
   const [equityAgg, setEquityAgg] = useState<AggregationLevel>('daily');
   const [ddAgg, setDdAgg] = useState<AggregationLevel>('daily');
   const equityChartRef = useRef<ChartJS<'line'> | null>(null) as any;
@@ -87,6 +88,7 @@ export default function AnalyticsPage() {
   useEffect(() => {
     if (wallet && trades.length > 0) {
       getPnlSummary(wallet).then(setPnlSummary).catch(() => {});
+      getDailyFunding(wallet).then(setDailyFunding).catch(() => {});
     }
   }, [wallet, trades]);
 
@@ -132,8 +134,28 @@ export default function AnalyticsPage() {
   const stats = useMemo(() => filtered.length > 0 ? computeStats(filtered) : null, [filtered]);
   const sorted = useMemo(() => [...filtered].sort((a, b) => a.open_time - b.open_time), [filtered]);
 
+  // Use funding-inclusive pnlSummary when filters don't actually remove any trades
+  // (e.g. filtering by BTC when the wallet only has BTC trades).
+  const allTradesShown = filtered.length === trades.length;
+
   // ── Equity curve (aggregated) ──
-  const equityChart = useMemo(() => prepareEquityChartData(filtered, equityAgg), [filtered, equityAgg]);
+  const chartFunding = allTradesShown ? dailyFunding : undefined;
+  const equityChart = useMemo(() => {
+    const chart = prepareEquityChartData(filtered, equityAgg, chartFunding);
+    // When all trades shown, adjust so final value matches pnlSummary.net_pnl exactly.
+    if (!allTradesShown || !pnlSummary || chart.points.length === 0) return chart;
+    const pts = chart.points;
+    const rawFinal = pts[pts.length - 1].y;
+    const target = parseFloat(pnlSummary.net_pnl.toFixed(2));
+    const adj = target - rawFinal;
+    if (Math.abs(adj) < 0.005) return chart;
+    const n = pts.length;
+    const adjusted = pts.map((p, i) => ({
+      ...p,
+      y: parseFloat((p.y + adj * ((i + 1) / n)).toFixed(2)),
+    }));
+    return { ...chart, points: adjusted };
+  }, [filtered, equityAgg, chartFunding, allTradesShown, pnlSummary]);
   const equityData = equityChart.points;
   const equityFinal = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
   const equityIsProfit = equityFinal >= 0;
@@ -141,8 +163,8 @@ export default function AnalyticsPage() {
   const equityColorRgb = equityIsProfit ? COLORS.profitRgb : COLORS.lossRgb;
 
   // ── Drawdown (aggregated) ──
-  const ddChart = useMemo(() => prepareEquityChartData(filtered, ddAgg), [filtered, ddAgg]);
-  const drawdownRaw = useMemo(() => aggregateDrawdownData(aggregateEquityData(filtered, ddAgg)), [filtered, ddAgg]);
+  const ddChart = useMemo(() => prepareEquityChartData(filtered, ddAgg, chartFunding), [filtered, ddAgg, chartFunding]);
+  const drawdownRaw = useMemo(() => aggregateDrawdownData(aggregateEquityData(filtered, ddAgg, chartFunding)), [filtered, ddAgg, chartFunding]);
   const drawdownData = useMemo(() => {
     if (!ddChart.isPerTrade) return drawdownRaw;
     return drawdownRaw.map((p, i) => ({ x: i, y: p.y }));
@@ -268,8 +290,8 @@ export default function AnalyticsPage() {
     return <div className="p-6 secondary-text">No trades match the current filters.</div>;
   }
 
-  const displayNetPnl = (isUnfiltered && pnlSummary) ? pnlSummary.net_pnl : stats.netPnl;
-  const fundingSub = (isUnfiltered && pnlSummary?.total_funding !== null && pnlSummary?.total_funding !== undefined)
+  const displayNetPnl = (allTradesShown && pnlSummary) ? pnlSummary.net_pnl : stats.netPnl;
+  const fundingSub = (allTradesShown && pnlSummary?.total_funding !== null && pnlSummary?.total_funding !== undefined)
     ? `Funding ${formatPnl(pnlSummary.total_funding)}`
     : `Realized ${formatCurrency(stats.realizedPnl)}`;
 

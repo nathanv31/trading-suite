@@ -5,7 +5,7 @@ import { Line, Doughnut } from 'react-chartjs-2';
 import { useTrades } from '../context/TradeContext';
 import { useWallet } from '../context/WalletContext';
 import { formatCurrency, formatPnl, formatVolume, formatDate, formatTime, formatPrice } from '../utils/formatters';
-import { getPnlSummary } from '../api/client';
+import { getPnlSummary, getDailyFunding } from '../api/client';
 import {
   COLORS, prepareEquityChartData, perTradeScaleOverrides,
   lineChartOptions, lineDatasetDefaults, createGradient, tooltipConfig,
@@ -27,11 +27,13 @@ export default function HomePage() {
   const { wallet } = useWallet();
   const [pnlSummary, setPnlSummary] = useState<PnlSummary | null>(null);
   const [aggLevel, setAggLevel] = useState<AggregationLevel>('daily');
+  const [dailyFunding, setDailyFunding] = useState<Record<string, number>>({});
   const chartRef = useRef<ChartJS<'line'> | null>(null);
 
   useEffect(() => {
     if (wallet && trades.length > 0) {
       getPnlSummary(wallet).then(setPnlSummary).catch(() => {});
+      getDailyFunding(wallet).then(setDailyFunding).catch(() => {});
     }
   }, [wallet, trades]);
 
@@ -59,7 +61,23 @@ export default function HomePage() {
     };
   }, [trades]);
 
-  const equityChart = useMemo(() => prepareEquityChartData(trades, aggLevel), [trades, aggLevel]);
+  const equityChart = useMemo(() => {
+    const chart = prepareEquityChartData(trades, aggLevel, dailyFunding);
+    // Adjust equity curve so final value matches pnlSummary.net_pnl exactly.
+    // This corrects for funding gaps (cached vs live) and fills-vs-trades differences.
+    if (!pnlSummary || chart.points.length === 0) return chart;
+    const pts = chart.points;
+    const rawFinal = pts[pts.length - 1].y;
+    const target = parseFloat(pnlSummary.net_pnl.toFixed(2));
+    const adj = target - rawFinal;
+    if (Math.abs(adj) < 0.005) return chart;
+    const n = pts.length;
+    const adjusted = pts.map((p, i) => ({
+      ...p,
+      y: parseFloat((p.y + adj * ((i + 1) / n)).toFixed(2)),
+    }));
+    return { ...chart, points: adjusted };
+  }, [trades, aggLevel, dailyFunding, pnlSummary]);
   const equityData = equityChart.points;
 
   const finalPnl = equityData.length > 0 ? equityData[equityData.length - 1].y : 0;
