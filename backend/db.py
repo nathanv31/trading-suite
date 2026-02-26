@@ -106,6 +106,15 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_funding_wallet_time ON funding(wallet, time);
         CREATE INDEX IF NOT EXISTS idx_funding_wallet_coin_time ON funding(wallet, coin, time);
+
+        CREATE TABLE IF NOT EXISTS candle_cache (
+            coin TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            time INTEGER NOT NULL,
+            high REAL NOT NULL,
+            low REAL NOT NULL,
+            PRIMARY KEY (coin, interval, time)
+        );
     """)
     conn.commit()
     conn.close()

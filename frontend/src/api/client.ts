@@ -152,6 +152,19 @@ export async function getTradeFunding(tradeId: number, wallet?: string): Promise
   return fetchJSON<{ funding: number; count: number }>(`${BASE}/trades/${tradeId}/funding${params}`);
 }
 
+// ── Enrichment Status ──
+
+export interface EnrichmentStatus {
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  progress: number;
+  total: number;
+}
+
+export async function getEnrichmentStatus(wallet?: string): Promise<EnrichmentStatus> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<EnrichmentStatus>(`${BASE}/trades/enrichment-status${params}`);
+}
+
 // ── Candles ──
 
 export async function getCandles(coin: string, interval: string, start: number, end: number): Promise<unknown[]> {

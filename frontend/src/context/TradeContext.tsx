@@ -1,6 +1,6 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type { Trade } from '../types';
-import { getTrades, refreshTrades as apiRefresh, getTradeTagsMap, getAllTags } from '../api/client';
+import { getTrades, refreshTrades as apiRefresh, getTradeTagsMap, getAllTags, getEnrichmentStatus } from '../api/client';
 import { useWallet } from './WalletContext';
 
 interface TradeContextValue {
@@ -11,6 +11,7 @@ interface TradeContextValue {
   tagMap: Record<string, string[]>;
   allTags: string[];
   reloadTags: () => Promise<void>;
+  enriching: boolean;
 }
 
 const TradeContext = createContext<TradeContextValue>({
@@ -21,6 +22,7 @@ const TradeContext = createContext<TradeContextValue>({
   tagMap: {},
   allTags: [],
   reloadTags: async () => {},
+  enriching: false,
 });
 
 export function TradeProvider({ children }: { children: ReactNode }) {
@@ -30,6 +32,40 @@ export function TradeProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [tagMap, setTagMap] = useState<Record<string, string[]>>({});
   const [allTags, setAllTags] = useState<string[]>([]);
+  const [enriching, setEnriching] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(() => {
+    if (!wallet) return;
+    stopPolling();
+    setEnriching(true);
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await getEnrichmentStatus(wallet);
+        if (status.status === 'completed') {
+          stopPolling();
+          setEnriching(false);
+          // Silently reload trades to pick up enriched MAE/MFE
+          const data = await getTrades(wallet);
+          setTrades(data);
+        } else if (status.status === 'failed' || status.status === 'idle') {
+          stopPolling();
+          setEnriching(false);
+        }
+        // 'running' — keep polling
+      } catch {
+        // Network error — keep polling, will retry
+      }
+    }, 2000);
+  }, [wallet, stopPolling]);
 
   const loadTags = useCallback(async () => {
     if (!wallet) return;
@@ -66,16 +102,28 @@ export function TradeProvider({ children }: { children: ReactNode }) {
       setError(null);
       const data = await apiRefresh(wallet);
       setTrades(data);
+      // Start polling for background enrichment completion
+      startPolling();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to refresh trades');
     } finally {
       setLoading(false);
     }
-  }, [wallet]);
+  }, [wallet, startPolling]);
 
   useEffect(() => {
     loadTrades();
   }, [loadTrades]);
+
+  // Check if enrichment is already running (e.g., page refresh mid-enrichment)
+  useEffect(() => {
+    if (!wallet || loading) return;
+    getEnrichmentStatus(wallet).then(status => {
+      if (status.status === 'running') {
+        startPolling();
+      }
+    }).catch(() => {});
+  }, [wallet, loading, startPolling]);
 
   // Load tags after trades are loaded
   useEffect(() => {
@@ -84,8 +132,11 @@ export function TradeProvider({ children }: { children: ReactNode }) {
     }
   }, [trades, loadTags]);
 
+  // Cleanup polling on unmount
+  useEffect(() => stopPolling, [stopPolling]);
+
   return (
-    <TradeContext.Provider value={{ trades, loading, error, refreshTrades: refresh, tagMap, allTags, reloadTags: loadTags }}>
+    <TradeContext.Provider value={{ trades, loading, error, refreshTrades: refresh, tagMap, allTags, reloadTags: loadTags, enriching }}>
       {children}
     </TradeContext.Provider>
   );

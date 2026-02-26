@@ -219,7 +219,7 @@ def _fetch_candles_paginated(candle_fetcher, coin, interval, start, end):
     return all_candles
 
 
-def _parse_candles(candles):
+def parse_candles(candles):
     """Parse raw candle dicts into sorted (start_time, high, low) tuples."""
     parsed = []
     for c in candles:
@@ -231,7 +231,7 @@ def _parse_candles(candles):
     return parsed
 
 
-def _extract_high_low(parsed_candles, open_time, close_time):
+def extract_high_low(parsed_candles, open_time, close_time):
     """Extract the overall high and low from candles within a time window."""
     trade_high = 0.0
     trade_low = float("inf")
@@ -305,7 +305,7 @@ def enrich_trades_with_candles(trades, candle_fetcher):
             if not candles:
                 continue
 
-            parsed = _parse_candles(candles)
+            parsed = parse_candles(candles)
             if not parsed:
                 continue
 
@@ -314,7 +314,7 @@ def enrich_trades_with_candles(trades, candle_fetcher):
                 if entry_px <= 0:
                     continue
 
-                trade_high, trade_low, found = _extract_high_low(
+                trade_high, trade_low, found = extract_high_low(
                     parsed, t["open_time"], t["close_time"]
                 )
                 if not found:
