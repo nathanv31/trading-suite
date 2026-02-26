@@ -135,22 +135,16 @@ export async function saveWeekNote(weekKey: string, notes: WeekNotes): Promise<v
 
 // ── PnL Summary ──
 
-export async function getPnlSummary(wallet?: string, coin?: string): Promise<PnlSummary> {
-  const qp = new URLSearchParams();
-  if (wallet) qp.set('wallet', wallet);
-  if (coin) qp.set('coin', coin);
-  const qs = qp.toString();
-  return fetchJSON<PnlSummary>(`${BASE}/pnl-summary${qs ? `?${qs}` : ''}`);
+export async function getPnlSummary(wallet?: string): Promise<PnlSummary> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<PnlSummary>(`${BASE}/pnl-summary${params}`);
 }
 
 // ── Funding ──
 
-export async function getDailyFunding(wallet?: string, coin?: string): Promise<Record<string, number>> {
-  const qp = new URLSearchParams();
-  if (wallet) qp.set('wallet', wallet);
-  if (coin) qp.set('coin', coin);
-  const qs = qp.toString();
-  return fetchJSON<Record<string, number>>(`${BASE}/funding/daily${qs ? `?${qs}` : ''}`);
+export async function getDailyFunding(wallet?: string): Promise<Record<string, number>> {
+  const params = wallet ? `?wallet=${wallet}` : '';
+  return fetchJSON<Record<string, number>>(`${BASE}/funding/daily${params}`);
 }
 
 export async function getTradeFunding(tradeId: number, wallet?: string): Promise<{ funding: number; count: number }> {

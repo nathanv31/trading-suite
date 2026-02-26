@@ -200,55 +200,33 @@ def get_pnl_summary():
 
     This lets the user verify the app's numbers against Hyperliquid's
     portfolio stats, which include trading PnL + fees + funding.
-
-    Optional query param ``coin`` filters fills and funding to a single coin.
     """
     wallet = _get_wallet()
     if not wallet:
         return jsonify({"error": "wallet query parameter is required"}), 400
 
-    coin = request.args.get("coin", "").strip() or None
-
-    # Sum closedPnl and fees from raw fills (optionally filtered by coin)
+    # Sum closedPnl and fees from all raw fills in the DB
     conn = get_db()
-    if coin:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(CAST(closed_pnl AS REAL)), 0) AS gross_pnl, "
-            "       COALESCE(SUM(CAST(fee AS REAL)), 0) AS total_fees "
-            "FROM fills WHERE wallet = ? AND coin = ?",
-            (wallet, coin),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(CAST(closed_pnl AS REAL)), 0) AS gross_pnl, "
-            "       COALESCE(SUM(CAST(fee AS REAL)), 0) AS total_fees "
-            "FROM fills WHERE wallet = ?",
-            (wallet,),
-        ).fetchone()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(CAST(closed_pnl AS REAL)), 0) AS gross_pnl, "
+        "       COALESCE(SUM(CAST(fee AS REAL)), 0) AS total_fees "
+        "FROM fills WHERE wallet = ?",
+        (wallet,),
+    ).fetchone()
     conn.close()
 
     gross_pnl = row["gross_pnl"] if row else 0.0
     total_fees = row["total_fees"] if row else 0.0
 
-    # Funding — use cached funding table so we can filter by coin
-    _ensure_funding_cached(wallet)
+    # Fetch funding payments from Hyperliquid
     total_funding = None
     try:
-        conn = get_db()
-        if coin:
-            frow = conn.execute(
-                "SELECT COALESCE(SUM(usdc), 0) AS total FROM funding WHERE wallet = ? AND coin = ?",
-                (wallet, coin),
-            ).fetchone()
-        else:
-            frow = conn.execute(
-                "SELECT COALESCE(SUM(usdc), 0) AS total FROM funding WHERE wallet = ?",
-                (wallet,),
-            ).fetchone()
-        conn.close()
-        total_funding = frow["total"] if frow else 0.0
+        funding_data = hl.fetch_user_funding(wallet)
+        total_funding = sum(
+            float(f.get("delta", {}).get("usdc", 0)) for f in funding_data
+        )
     except Exception as e:
-        print(f"[TRADES] Error reading cached funding: {e}")
+        print(f"[TRADES] Error fetching funding: {e}")
 
     # Net PnL = gross trading pnl - fees + funding
     net_pnl = gross_pnl - total_fees
@@ -319,25 +297,15 @@ def get_daily_funding():
     if not wallet:
         return jsonify({"error": "wallet query parameter is required"}), 400
 
-    coin = request.args.get("coin", "").strip() or None
-
     _ensure_funding_cached(wallet)
 
     conn = get_db()
-    if coin:
-        rows = conn.execute(
-            """SELECT date(time / 1000, 'unixepoch') AS day, SUM(usdc) AS total
-               FROM funding WHERE wallet = ? AND coin = ?
-               GROUP BY day ORDER BY day""",
-            (wallet, coin),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """SELECT date(time / 1000, 'unixepoch') AS day, SUM(usdc) AS total
-               FROM funding WHERE wallet = ?
-               GROUP BY day ORDER BY day""",
-            (wallet,),
-        ).fetchall()
+    rows = conn.execute(
+        """SELECT date(time / 1000, 'unixepoch') AS day, SUM(usdc) AS total
+           FROM funding WHERE wallet = ?
+           GROUP BY day ORDER BY day""",
+        (wallet,),
+    ).fetchall()
     conn.close()
 
     result = {row["day"]: round(row["total"], 6) for row in rows}

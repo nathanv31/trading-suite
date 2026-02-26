@@ -87,10 +87,10 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     if (wallet && trades.length > 0) {
-      getPnlSummary(wallet, coinFilter || undefined).then(setPnlSummary).catch(() => {});
-      getDailyFunding(wallet, coinFilter || undefined).then(setDailyFunding).catch(() => {});
+      getPnlSummary(wallet).then(setPnlSummary).catch(() => {});
+      getDailyFunding(wallet).then(setDailyFunding).catch(() => {});
     }
-  }, [wallet, trades, coinFilter]);
+  }, [wallet, trades]);
 
   const coins = useMemo(() => [...new Set(trades.map(t => t.coin))].sort(), [trades]);
 
@@ -134,14 +134,9 @@ export default function AnalyticsPage() {
   const stats = useMemo(() => filtered.length > 0 ? computeStats(filtered) : null, [filtered]);
   const sorted = useMemo(() => [...filtered].sort((a, b) => a.open_time - b.open_time), [filtered]);
 
-  // pnlSummary and dailyFunding are fetched with the coin filter applied server-side,
-  // so we only need to check whether the OTHER filters (side, result, tags, date)
-  // removed any trades from the coin-filtered base set.
-  const coinTradeCount = useMemo(
-    () => coinFilter ? trades.filter(t => t.coin === coinFilter).length : trades.length,
-    [trades, coinFilter],
-  );
-  const allTradesShown = filtered.length === coinTradeCount;
+  // Use funding-inclusive pnlSummary when filters don't actually remove any trades
+  // (e.g. filtering by BTC when the wallet only has BTC trades).
+  const allTradesShown = filtered.length === trades.length;
 
   // ── Equity curve (aggregated) ──
   const chartFunding = allTradesShown ? dailyFunding : undefined;
