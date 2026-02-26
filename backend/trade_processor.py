@@ -203,11 +203,56 @@ def _finalize_trade(t):
     }
 
 
+def _fetch_candles_paginated(candle_fetcher, coin, interval, start, end):
+    """Fetch candles with pagination (HL returns max 500 per request)."""
+    all_candles = []
+    cursor = start
+    while cursor < end:
+        batch = candle_fetcher(coin, interval, cursor, end)
+        if not batch:
+            break
+        all_candles.extend(batch)
+        if len(batch) < 500:
+            break
+        # Move cursor past the last candle's close time
+        cursor = int(batch[-1]["T"])
+    return all_candles
+
+
+def _parse_candles(candles):
+    """Parse raw candle dicts into sorted (start_time, high, low) tuples."""
+    parsed = []
+    for c in candles:
+        try:
+            parsed.append((int(c["t"]), float(c["h"]), float(c["l"])))
+        except (KeyError, ValueError):
+            continue
+    parsed.sort(key=lambda x: x[0])
+    return parsed
+
+
+def _extract_high_low(parsed_candles, open_time, close_time):
+    """Extract the overall high and low from candles within a time window."""
+    trade_high = 0.0
+    trade_low = float("inf")
+    found = False
+    for ct, ch, cl in parsed_candles:
+        if ct + 60000 < open_time:
+            continue
+        if ct > close_time:
+            break
+        trade_high = max(trade_high, ch)
+        trade_low = min(trade_low, cl)
+        found = True
+    return trade_high, trade_low, found
+
+
 def enrich_trades_with_candles(trades, candle_fetcher):
     """Enrich MFE/MAE using actual candle highs/lows instead of fill prices only.
 
-    Fetches 1-minute candles per coin (one API call per coin) and updates
-    each trade's mae/mfe to reflect the true market extremes during the trade.
+    Groups consecutive trades on the same coin into time-bounded batches
+    (<=500 minutes each) to minimize API calls while staying within the
+    Hyperliquid 500-candle-per-request limit.
 
     Args:
         trades: List of finalized trade dicts from process_fills_to_trades().
@@ -227,73 +272,63 @@ def enrich_trades_with_candles(trades, candle_fetcher):
             by_coin[coin] = []
         by_coin[coin].append(t)
 
+    max_batch_ms = 500 * 60 * 1000  # 500 minutes in ms (fits in one 1m candle request)
+
     for coin, coin_trades in by_coin.items():
-        # Find the full time range for this coin
-        min_time = min(t["open_time"] for t in coin_trades)
-        max_time = max(t["close_time"] for t in coin_trades)
+        # Sort by open_time to enable batching
+        coin_trades.sort(key=lambda t: t["open_time"])
 
-        try:
-            candles = candle_fetcher(coin, "1m", min_time, max_time)
-        except Exception as e:
-            print(f"[ENRICH] Failed to fetch candles for {coin}: {e}")
-            continue
+        # Build batches of trades whose combined time span fits in one API call
+        batches = []
+        batch_start = coin_trades[0]["open_time"]
+        batch = [coin_trades[0]]
 
-        if not candles:
-            continue
-
-        # Parse candles into (start_time, high, low) tuples, sorted by time
-        parsed = []
-        for c in candles:
-            try:
-                ct = int(c["t"])
-                ch = float(c["h"])
-                cl = float(c["l"])
-                parsed.append((ct, ch, cl))
-            except (KeyError, ValueError):
-                continue
-
-        if not parsed:
-            continue
-
-        parsed.sort(key=lambda x: x[0])
-
-        # For each trade, find candles within its time window and update MFE/MAE
-        for t in coin_trades:
-            entry_px = t["entry_px"]
-            if entry_px <= 0:
-                continue
-
-            is_long = t["side"] == "B"
-            open_time = t["open_time"]
-            close_time = t["close_time"]
-
-            # Filter candles to this trade's window
-            trade_high = 0.0
-            trade_low = float("inf")
-            found = False
-            for ct, ch, cl in parsed:
-                # 1m candle at time ct covers [ct, ct+60000)
-                # Include candle if it overlaps with the trade window
-                if ct + 60000 < open_time:
-                    continue
-                if ct > close_time:
-                    break
-                trade_high = max(trade_high, ch)
-                trade_low = min(trade_low, cl)
-                found = True
-
-            if not found:
-                continue
-
-            # Compute updated MFE/MAE from candle extremes
-            if is_long:
-                mfe_px = trade_high
-                mae_px = trade_low
+        for t in coin_trades[1:]:
+            if t["close_time"] - batch_start <= max_batch_ms:
+                batch.append(t)
             else:
-                mfe_px = trade_low
-                mae_px = trade_high
+                batches.append((batch_start, batch[-1]["close_time"], batch))
+                batch_start = t["open_time"]
+                batch = [t]
+        batches.append((batch_start, batch[-1]["close_time"], batch))
 
-            t["mfe"] = round(abs(mfe_px - entry_px) / entry_px, 6)
-            t["mae"] = round(abs(mae_px - entry_px) / entry_px, 6)
+        # Fetch candles per batch and enrich trades
+        for b_start, b_end, batch_trades in batches:
+            try:
+                candles = _fetch_candles_paginated(
+                    candle_fetcher, coin, "1m", b_start, b_end
+                )
+            except Exception as e:
+                print(f"[ENRICH] Failed to fetch candles for {coin}: {e}")
+                continue
+
+            if not candles:
+                continue
+
+            parsed = _parse_candles(candles)
+            if not parsed:
+                continue
+
+            for t in batch_trades:
+                entry_px = t["entry_px"]
+                if entry_px <= 0:
+                    continue
+
+                trade_high, trade_low, found = _extract_high_low(
+                    parsed, t["open_time"], t["close_time"]
+                )
+                if not found:
+                    continue
+
+                is_long = t["side"] == "B"
+                if is_long:
+                    mfe_px = trade_high
+                    mae_px = trade_low
+                else:
+                    mfe_px = trade_low
+                    mae_px = trade_high
+
+                t["mfe"] = round(abs(mfe_px - entry_px) / entry_px, 6)
+                t["mae"] = round(abs(mae_px - entry_px) / entry_px, 6)
 
     return trades
