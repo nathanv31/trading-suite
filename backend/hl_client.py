@@ -82,9 +82,6 @@ class HyperliquidClient:
     def fetch_user_funding(self, wallet, start_time=1667260800000):
         """Fetch all funding payment history for a wallet.
 
-        The userFunding API returns max 500 entries per request,
-        so we paginate by advancing startTime past the last entry.
-
         Args:
             wallet: Ethereum address
             start_time: Start timestamp in ms, defaults to HL launch
@@ -108,13 +105,10 @@ class HyperliquidClient:
             all_funding.extend(result)
             print(f"[HL] Fetched {len(result)} funding entries (total: {len(all_funding)})")
 
-            # HL returns max 500 per request; stop if we got less than a full page
-            if len(result) < 500:
+            if len(result) < HL_FILLS_PER_PAGE:
                 break
 
             last_time = max(f["time"] for f in result)
-            if last_time <= current_start:
-                break  # No progress, avoid infinite loop
             current_start = last_time + 1
             time.sleep(0.5)
 
