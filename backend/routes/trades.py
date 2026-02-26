@@ -142,6 +142,10 @@ def _fetch_and_process(wallet):
         print(f"[TRADES] Candle enrichment failed, using fill-based MFE/MAE: {e}")
 
     _cache_trades(wallet, trades)
+
+    # Also refresh funding so expanded trade details are up to date
+    _ensure_funding_cached(wallet)
+
     return trades
 
 
@@ -277,19 +281,27 @@ def _cache_funding(wallet, funding_data):
 
 
 def _ensure_funding_cached(wallet):
-    """Fetch and cache funding if not already cached."""
+    """Incrementally fetch and cache any new funding entries.
+
+    Instead of only fetching when the cache is empty, always checks for
+    new funding since the latest cached timestamp. Uses INSERT OR IGNORE
+    to skip duplicates.
+    """
     conn = get_db()
-    count = conn.execute(
-        "SELECT COUNT(*) FROM funding WHERE wallet = ?", (wallet,)
-    ).fetchone()[0]
+    row = conn.execute(
+        "SELECT MAX(time) AS latest FROM funding WHERE wallet = ?", (wallet,)
+    ).fetchone()
     conn.close()
 
-    if count == 0:
-        try:
-            funding_data = hl.fetch_user_funding(wallet)
+    # Start from latest cached entry (or HL launch if none)
+    start_time = (row["latest"] if row and row["latest"] else 1667260800000)
+
+    try:
+        funding_data = hl.fetch_user_funding(wallet, start_time=start_time)
+        if funding_data:
             _cache_funding(wallet, funding_data)
-        except Exception as e:
-            print(f"[TRADES] Error fetching funding: {e}")
+    except Exception as e:
+        print(f"[TRADES] Error fetching funding: {e}")
 
 
 @trades_bp.route("/api/funding/daily")
