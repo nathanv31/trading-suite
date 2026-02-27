@@ -62,19 +62,25 @@ class EnrichmentManager:
 
     def _run(self, wallet, trades, candle_fetcher, job):
         """Background thread: enrich trades with candle data."""
+        t0 = _time.time()
         try:
             self._enrich(wallet, trades, candle_fetcher, job)
             if not job.cancel.is_set():
                 job.status = "completed"
+                elapsed = _time.time() - t0
                 print(f"[ENRICH] Completed enrichment for {wallet} "
-                      f"({job.progress}/{job.total} batches)")
+                      f"({job.progress}/{job.total} batches, {elapsed:.1f}s)")
         except Exception as e:
             job.status = "failed"
             job.error = str(e)
             print(f"[ENRICH] Failed for {wallet}: {e}")
 
     def _enrich(self, wallet, trades, candle_fetcher, job):
-        """Core enrichment logic with candle caching."""
+        """Core enrichment logic with candle caching.
+
+        Uses a single DB connection for the entire run to avoid
+        per-batch connection overhead (3 PRAGMAs per get_db() call).
+        """
         if not trades:
             return
 
@@ -107,90 +113,88 @@ class EnrichmentManager:
 
         job.total = len(all_batches)
 
-        for coin, b_start, b_end, batch_trades in all_batches:
-            if job.cancel.is_set():
-                print(f"[ENRICH] Cancelled for {wallet}")
-                return
+        # Single DB connection for the entire enrichment run
+        conn = get_db()
+        try:
+            all_updates = []
 
-            try:
-                parsed = self._get_candles(coin, b_start, b_end, candle_fetcher)
-            except Exception as e:
-                print(f"[ENRICH] Failed to get candles for {coin}: {e}")
-                job.progress += 1
-                continue
+            for coin, b_start, b_end, batch_trades in all_batches:
+                if job.cancel.is_set():
+                    print(f"[ENRICH] Cancelled for {wallet}")
+                    return
 
-            if not parsed:
-                job.progress += 1
-                continue
-
-            # Compute enriched MAE/MFE for each trade in this batch
-            updates = []
-            for t in batch_trades:
-                entry_px = t["entry_px"]
-                if entry_px <= 0:
-                    continue
-
-                trade_high, trade_low, found = extract_high_low(
-                    parsed, t["open_time"], t["close_time"]
-                )
-                if not found:
-                    continue
-
-                is_long = t["side"] == "B"
-                if is_long:
-                    mfe_px = trade_high
-                    mae_px = trade_low
-                else:
-                    mfe_px = trade_low
-                    mae_px = trade_high
-
-                new_mfe = round(abs(mfe_px - entry_px) / entry_px, 6)
-                new_mae = round(abs(mae_px - entry_px) / entry_px, 6)
-                updates.append((new_mae, new_mfe, t["id"]))
-
-            # Batch UPDATE trades in DB
-            if updates:
-                conn = get_db()
                 try:
-                    conn.executemany(
-                        "UPDATE trades SET mae = ?, mfe = ? WHERE id = ?",
-                        updates,
+                    parsed = self._get_candles(
+                        conn, coin, b_start, b_end, candle_fetcher
                     )
-                    conn.commit()
                 except Exception as e:
-                    print(f"[ENRICH] DB update error for {coin}: {e}")
-                    conn.rollback()
-                finally:
-                    conn.close()
+                    print(f"[ENRICH] Failed to get candles for {coin}: {e}")
+                    job.progress += 1
+                    continue
 
-            job.progress += 1
+                if not parsed:
+                    job.progress += 1
+                    continue
 
-    def _get_candles(self, coin, start, end, candle_fetcher):
+                # Compute enriched MAE/MFE for each trade in this batch
+                for t in batch_trades:
+                    entry_px = t["entry_px"]
+                    if entry_px <= 0:
+                        continue
+
+                    trade_high, trade_low, found = extract_high_low(
+                        parsed, t["open_time"], t["close_time"]
+                    )
+                    if not found:
+                        continue
+
+                    is_long = t["side"] == "B"
+                    if is_long:
+                        mfe_px = trade_high
+                        mae_px = trade_low
+                    else:
+                        mfe_px = trade_low
+                        mae_px = trade_high
+
+                    new_mfe = round(abs(mfe_px - entry_px) / entry_px, 6)
+                    new_mae = round(abs(mae_px - entry_px) / entry_px, 6)
+                    all_updates.append((new_mae, new_mfe, t["id"]))
+
+                job.progress += 1
+
+            # Single batch UPDATE + commit for all trades
+            if all_updates:
+                conn.executemany(
+                    "UPDATE trades SET mae = ?, mfe = ? WHERE id = ?",
+                    all_updates,
+                )
+                conn.commit()
+        except Exception as e:
+            print(f"[ENRICH] DB error: {e}")
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _get_candles(self, conn, coin, start, end, candle_fetcher):
         """Get parsed candles for a time range, using cache when possible.
 
         Returns list of (time, high, low) tuples sorted by time.
         """
         # Check cache first
-        conn = get_db()
         rows = conn.execute(
             "SELECT time, high, low FROM candle_cache "
             "WHERE coin = ? AND interval = '1m' AND time >= ? AND time <= ? "
             "ORDER BY time",
             (coin, start, end),
         ).fetchall()
-        conn.close()
 
-        # If we have cached candles covering this range, use them
         if rows:
-            cached = [(r["time"], r["high"], r["low"]) for r in rows]
-            # Check if cache covers the full range (at least first and last minute)
-            first_cached = cached[0][0]
-            last_cached = cached[-1][0]
-            # Allow 60s tolerance — candle times are minute-aligned
-            if first_cached <= start + 60000 and last_cached >= end - 60000:
-                return cached
+            print(f"[ENRICH] Cache HIT for {coin} ({len(rows)} candles)")
+            return [(r["time"], r["high"], r["low"]) for r in rows]
 
         # Cache miss — fetch from Hyperliquid
+        print(f"[ENRICH] Cache MISS for {coin} — fetching from Hyperliquid")
         raw_candles = self._fetch_paginated(candle_fetcher, coin, start, end)
         if not raw_candles:
             return []
@@ -201,7 +205,6 @@ class EnrichmentManager:
 
         # Store in cache
         cache_rows = [(coin, "1m", t, h, l) for t, h, l in parsed]
-        conn = get_db()
         try:
             conn.executemany(
                 "INSERT OR IGNORE INTO candle_cache (coin, interval, time, high, low) "
@@ -211,9 +214,6 @@ class EnrichmentManager:
             conn.commit()
         except Exception as e:
             print(f"[ENRICH] Cache write error for {coin}: {e}")
-            conn.rollback()
-        finally:
-            conn.close()
 
         return parsed
 

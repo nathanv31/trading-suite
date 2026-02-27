@@ -33,21 +33,24 @@ export function TradeProvider({ children }: { children: ReactNode }) {
   const [tagMap, setTagMap] = useState<Record<string, string[]>>({});
   const [allTags, setAllTags] = useState<string[]>([]);
   const [enriching, setEnriching] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollCountRef = useRef(0);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
-      clearInterval(pollRef.current);
+      clearTimeout(pollRef.current);
       pollRef.current = null;
     }
+    pollCountRef.current = 0;
   }, []);
 
   const startPolling = useCallback(() => {
     if (!wallet) return;
     stopPolling();
     setEnriching(true);
+    pollCountRef.current = 0;
 
-    pollRef.current = setInterval(async () => {
+    const poll = async () => {
       try {
         const status = await getEnrichmentStatus(wallet);
         if (status.status === 'completed') {
@@ -56,15 +59,23 @@ export function TradeProvider({ children }: { children: ReactNode }) {
           // Silently reload trades to pick up enriched MAE/MFE
           const data = await getTrades(wallet);
           setTrades(data);
+          return;
         } else if (status.status === 'failed' || status.status === 'idle') {
           stopPolling();
           setEnriching(false);
+          return;
         }
-        // 'running' — keep polling
+        // 'running' — schedule next poll (fast at first, slower after)
       } catch {
         // Network error — keep polling, will retry
       }
-    }, 2000);
+      pollCountRef.current++;
+      const delay = pollCountRef.current <= 5 ? 500 : 2000;
+      pollRef.current = setTimeout(poll, delay);
+    };
+
+    // First check after 500ms
+    pollRef.current = setTimeout(poll, 500);
   }, [wallet, stopPolling]);
 
   const loadTags = useCallback(async () => {
