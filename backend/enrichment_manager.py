@@ -181,12 +181,17 @@ class EnrichmentManager:
 
         Returns list of (time, high, low) tuples sorted by time.
         """
+        # Candle open times are minute-aligned, but trade times are arbitrary
+        # milliseconds. A trade opening at :45 into a minute needs the candle
+        # that started at :00. Extend start by 1 minute to catch it.
+        cache_start = start - 60000
+
         # Check cache first
         rows = conn.execute(
             "SELECT time, high, low FROM candle_cache "
             "WHERE coin = ? AND interval = '1m' AND time >= ? AND time <= ? "
             "ORDER BY time",
-            (coin, start, end),
+            (coin, cache_start, end),
         ).fetchall()
 
         if rows:
@@ -195,7 +200,7 @@ class EnrichmentManager:
 
         # Cache miss — fetch from Hyperliquid
         print(f"[ENRICH] Cache MISS for {coin} — fetching from Hyperliquid")
-        raw_candles = self._fetch_paginated(candle_fetcher, coin, start, end)
+        raw_candles = self._fetch_paginated(candle_fetcher, coin, cache_start, end)
         if not raw_candles:
             return []
 
