@@ -116,31 +116,6 @@ class EnrichmentManager:
         # Single DB connection for the entire enrichment run
         conn = get_db()
         try:
-            # Diagnostic: check if candle_cache has data from previous runs
-            cache_count = conn.execute(
-                "SELECT COUNT(*) FROM candle_cache"
-            ).fetchone()[0]
-            print(f"[ENRICH] candle_cache has {cache_count} rows at start")
-
-            if cache_count > 0 and all_batches:
-                # Check first batch specifically
-                first_coin, first_start, first_end = (
-                    all_batches[0][0], all_batches[0][1], all_batches[0][2]
-                )
-                diag = conn.execute(
-                    "SELECT COUNT(*) FROM candle_cache "
-                    "WHERE coin = ? AND interval = '1m'",
-                    (first_coin,),
-                ).fetchone()[0]
-                print(f"[ENRICH] candle_cache has {diag} rows for {first_coin}")
-                diag2 = conn.execute(
-                    "SELECT MIN(time), MAX(time) FROM candle_cache "
-                    "WHERE coin = ? AND interval = '1m'",
-                    (first_coin,),
-                ).fetchone()
-                print(f"[ENRICH] cached time range: {diag2[0]} - {diag2[1]}")
-                print(f"[ENRICH] first batch needs: {first_start - 60000} - {first_end}")
-
             all_updates = []
 
             for coin, b_start, b_end, batch_trades in all_batches:
@@ -211,7 +186,7 @@ class EnrichmentManager:
         # that started at :00. Extend start by 1 minute to catch it.
         cache_start = start - 60000
 
-        # Check cache first
+        # Check candle cache first
         rows = conn.execute(
             "SELECT time, high, low FROM candle_cache "
             "WHERE coin = ? AND interval = '1m' AND time >= ? AND time <= ? "
@@ -220,24 +195,41 @@ class EnrichmentManager:
         ).fetchall()
 
         if rows:
-            print(f"[ENRICH] Cache HIT for {coin} ({len(rows)} candles)")
             return [(r["time"], r["high"], r["low"]) for r in rows]
 
+        # Check negative cache — skip ranges the API already returned empty for
+        neg = conn.execute(
+            "SELECT checked_at FROM candle_empty_ranges "
+            "WHERE coin = ? AND interval = '1m' "
+            "AND range_start = ? AND range_end = ?",
+            (coin, cache_start, end),
+        ).fetchone()
+        if neg:
+            age_hours = (_time.time() * 1000 - neg["checked_at"]) / 3_600_000
+            if age_hours < 24:
+                return []
+
         # Cache miss — fetch from Hyperliquid
-        print(f"[ENRICH] Cache MISS for {coin} [{cache_start} - {end}]")
         raw_candles = self._fetch_paginated(candle_fetcher, coin, cache_start, end)
         if not raw_candles:
-            print(f"[ENRICH] API returned EMPTY for {coin} [{cache_start} - {end}]")
+            # Store negative cache so we don't retry this range for 24h
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO candle_empty_ranges "
+                    "(coin, interval, range_start, range_end, checked_at) "
+                    "VALUES (?, '1m', ?, ?, ?)",
+                    (coin, cache_start, end, int(_time.time() * 1000)),
+                )
+                conn.commit()
+            except Exception:
+                pass
             return []
 
         parsed = parse_candles(raw_candles)
         if not parsed:
-            print(f"[ENRICH] parse_candles returned EMPTY ({len(raw_candles)} raw)")
             return []
 
-        print(f"[ENRICH] Fetched {len(parsed)} candles for {coin}")
-
-        # Store in cache
+        # Store in candle cache
         cache_rows = [(coin, "1m", t, h, l) for t, h, l in parsed]
         try:
             conn.executemany(
@@ -246,12 +238,6 @@ class EnrichmentManager:
                 cache_rows,
             )
             conn.commit()
-            # Verify write persisted
-            verify = conn.execute(
-                "SELECT COUNT(*) FROM candle_cache WHERE coin = ?", (coin,)
-            ).fetchone()[0]
-            print(f"[ENRICH] Wrote {len(cache_rows)} candles, "
-                  f"total cached for {coin}: {verify}")
         except Exception as e:
             print(f"[ENRICH] Cache write error for {coin}: {e}")
 

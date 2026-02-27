@@ -115,6 +115,15 @@ def init_db():
             low REAL NOT NULL,
             PRIMARY KEY (coin, interval, time)
         );
+
+        CREATE TABLE IF NOT EXISTS candle_empty_ranges (
+            coin TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            range_start INTEGER NOT NULL,
+            range_end INTEGER NOT NULL,
+            checked_at INTEGER NOT NULL,
+            PRIMARY KEY (coin, interval, range_start, range_end)
+        );
     """)
     conn.commit()
     conn.close()
