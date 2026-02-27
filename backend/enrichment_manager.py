@@ -224,14 +224,18 @@ class EnrichmentManager:
             return [(r["time"], r["high"], r["low"]) for r in rows]
 
         # Cache miss — fetch from Hyperliquid
-        print(f"[ENRICH] Cache MISS for {coin} — fetching from Hyperliquid")
+        print(f"[ENRICH] Cache MISS for {coin} [{cache_start} - {end}]")
         raw_candles = self._fetch_paginated(candle_fetcher, coin, cache_start, end)
         if not raw_candles:
+            print(f"[ENRICH] API returned EMPTY for {coin} [{cache_start} - {end}]")
             return []
 
         parsed = parse_candles(raw_candles)
         if not parsed:
+            print(f"[ENRICH] parse_candles returned EMPTY ({len(raw_candles)} raw)")
             return []
+
+        print(f"[ENRICH] Fetched {len(parsed)} candles for {coin}")
 
         # Store in cache
         cache_rows = [(coin, "1m", t, h, l) for t, h, l in parsed]
