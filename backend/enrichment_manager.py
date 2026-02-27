@@ -116,6 +116,31 @@ class EnrichmentManager:
         # Single DB connection for the entire enrichment run
         conn = get_db()
         try:
+            # Diagnostic: check if candle_cache has data from previous runs
+            cache_count = conn.execute(
+                "SELECT COUNT(*) FROM candle_cache"
+            ).fetchone()[0]
+            print(f"[ENRICH] candle_cache has {cache_count} rows at start")
+
+            if cache_count > 0 and all_batches:
+                # Check first batch specifically
+                first_coin, first_start, first_end = (
+                    all_batches[0][0], all_batches[0][1], all_batches[0][2]
+                )
+                diag = conn.execute(
+                    "SELECT COUNT(*) FROM candle_cache "
+                    "WHERE coin = ? AND interval = '1m'",
+                    (first_coin,),
+                ).fetchone()[0]
+                print(f"[ENRICH] candle_cache has {diag} rows for {first_coin}")
+                diag2 = conn.execute(
+                    "SELECT MIN(time), MAX(time) FROM candle_cache "
+                    "WHERE coin = ? AND interval = '1m'",
+                    (first_coin,),
+                ).fetchone()
+                print(f"[ENRICH] cached time range: {diag2[0]} - {diag2[1]}")
+                print(f"[ENRICH] first batch needs: {first_start - 60000} - {first_end}")
+
             all_updates = []
 
             for coin, b_start, b_end, batch_trades in all_batches:
@@ -217,6 +242,12 @@ class EnrichmentManager:
                 cache_rows,
             )
             conn.commit()
+            # Verify write persisted
+            verify = conn.execute(
+                "SELECT COUNT(*) FROM candle_cache WHERE coin = ?", (coin,)
+            ).fetchone()[0]
+            print(f"[ENRICH] Wrote {len(cache_rows)} candles, "
+                  f"total cached for {coin}: {verify}")
         except Exception as e:
             print(f"[ENRICH] Cache write error for {coin}: {e}")
 
