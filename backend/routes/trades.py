@@ -5,7 +5,8 @@ import time
 from flask import Blueprint, request, jsonify
 from db import get_db
 from hl_client import HyperliquidClient
-from trade_processor import process_fills_to_trades, enrich_trades_with_candles
+from trade_processor import process_fills_to_trades
+from enrichment_manager import enrichment_mgr
 trades_bp = Blueprint("trades", __name__)
 hl = HyperliquidClient()
 
@@ -135,13 +136,14 @@ def _fetch_and_process(wallet):
     trades = process_fills_to_trades(fills)
     print(f"[TRADES] Found {len(trades)} round-trip trades")
 
-    print(f"[TRADES] Enriching MFE/MAE with candle data...")
-    try:
-        trades = enrich_trades_with_candles(trades, hl.fetch_candles)
-    except Exception as e:
-        print(f"[TRADES] Candle enrichment failed, using fill-based MFE/MAE: {e}")
-
     _cache_trades(wallet, trades)
+
+    # Load from DB to get auto-assigned IDs, then start background enrichment
+    cached = _load_cached_trades(wallet)
+    if cached:
+        enrichment_mgr.start_enrichment(wallet, cached, hl.fetch_candles)
+        print(f"[TRADES] Background MFE/MAE enrichment started")
+
     return trades
 
 
@@ -183,6 +185,15 @@ def refresh_trades():
 
     result = _load_cached_trades(wallet)
     return jsonify(result or [])
+
+
+@trades_bp.route("/api/trades/enrichment-status")
+def enrichment_status():
+    """Get the status of background MFE/MAE candle enrichment."""
+    wallet = _get_wallet()
+    if not wallet:
+        return jsonify({"error": "wallet query parameter is required"}), 400
+    return jsonify(enrichment_mgr.get_status(wallet))
 
 
 @trades_bp.route("/api/state")
