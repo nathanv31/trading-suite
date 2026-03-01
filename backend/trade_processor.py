@@ -103,14 +103,55 @@ def _process_coin_fills(coin, fills):
                     trades.append(trade)
                 current = None
 
-            # Handle position flip (e.g., long → short in one fill)
-            # This shouldn't happen with proper dir fields but handle defensively
-            elif is_close and current and not current.get("orphan"):
-                # Position reduced but not closed — partial close, keep going
+            # Position flipped (crossed zero) — split into close + open
+            elif (start_pos > 0 and end_pos < 0) or (start_pos < 0 and end_pos > 0):
+                close_sz = abs(start_pos)
+                open_sz = abs(end_pos)
+                fee_ratio = close_sz / sz if sz > 0 else 1.0
+
+                # Undo the full-size exit accumulation from lines above
+                current["exit_value"] -= px * sz
+                current["exit_size"] -= sz
+                current["fees"] -= fee
+
+                # Re-apply only the closing portion
+                current["exit_value"] += px * close_sz
+                current["exit_size"] += close_sz
+                current["fees"] += fee * fee_ratio
+                current["last_px"] = px
+                current["last_time"] = f["time"]
+
+                # Finalize the closed trade
+                trade = _finalize_trade(current)
+                if trade is not None:
+                    trades.append(trade)
+
+                # Start a new trade with the opening portion
+                new_side = "B" if end_pos > 0 else "A"
+                current = {
+                    "coin": coin,
+                    "side": new_side,
+                    "entry_value": px * open_sz,
+                    "entry_size": open_sz,
+                    "realized_pnl": 0.0,
+                    "fees": fee * (1 - fee_ratio),
+                    "open_time": f["time"],
+                    "last_time": f["time"],
+                    "last_px": px,
+                    "max_px": px,
+                    "min_px": px,
+                    "exit_value": 0.0,
+                    "exit_size": 0.0,
+                    "fill_ids": [tid],
+                    "orphan": False,
+                }
+
+            # Partial close — position reduced but same sign, keep going
+            else:
                 pass
 
-        # --- Edge case: fill is both opening and closing (flip) ---
-        # The API should split these into separate fills, but handle just in case
+        # --- Edge case: unknown dir field ---
+        # Fallback to position math if dir is missing/unexpected
         if not is_open and not is_close:
             # Unknown dir — use position math as fallback
             if current is None and abs(end_pos) > 1e-9:
