@@ -59,49 +59,59 @@ def _cache_fills(wallet, fills):
 
 
 def _cache_trades(wallet, trades):
-    """Store grouped trades in SQLite, replacing existing ones for this wallet."""
-    rows = [
-        (
-            wallet,
-            t["coin"],
-            t["side"],
-            t["entry_px"],
-            t.get("exit_px"),
-            t["size"],
-            t["pnl"],
-            t["fees"],
-            t["open_time"],
-            t.get("close_time"),
-            t.get("hold_ms"),
-            t.get("mae"),
-            t.get("mfe"),
-            t["fill_ids"],
-        )
-        for t in trades
-    ]
+    """Store grouped trades in SQLite, preserving IDs for unchanged trades.
+
+    Matches new trades to existing ones by fill_ids (a stable identifier)
+    so that associated tags, notes, and screenshots survive a refresh.
+    """
     conn = get_db()
     try:
-        # Delete child records that reference trades via foreign keys
-        conn.execute(
-            "DELETE FROM trade_screenshots WHERE trade_id IN (SELECT id FROM trades WHERE wallet = ?)",
-            (wallet,),
-        )
-        conn.execute(
-            "DELETE FROM trade_tags WHERE trade_id IN (SELECT id FROM trades WHERE wallet = ?)",
-            (wallet,),
-        )
-        conn.execute(
-            "DELETE FROM trade_notes WHERE trade_id IN (SELECT id FROM trades WHERE wallet = ?)",
-            (wallet,),
-        )
-        conn.execute("DELETE FROM trades WHERE wallet = ?", (wallet,))
-        conn.executemany(
-            """INSERT INTO trades
-               (wallet, coin, side, entry_px, exit_px, size, pnl, fees,
-                open_time, close_time, hold_ms, mae, mfe, fill_ids)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            rows,
-        )
+        # Build map of existing fill_ids -> trade id
+        existing = conn.execute(
+            "SELECT id, fill_ids FROM trades WHERE wallet = ?", (wallet,)
+        ).fetchall()
+        old_map = {row["fill_ids"]: row["id"] for row in existing}
+
+        new_fill_ids = set()
+        for t in trades:
+            fill_ids = t["fill_ids"]
+            new_fill_ids.add(fill_ids)
+
+            if fill_ids in old_map:
+                # UPDATE existing trade in place (preserves ID and child records)
+                trade_id = old_map[fill_ids]
+                conn.execute(
+                    """UPDATE trades SET coin=?, side=?, entry_px=?, exit_px=?,
+                       size=?, pnl=?, fees=?, open_time=?, close_time=?,
+                       hold_ms=?, mae=?, mfe=?
+                       WHERE id=?""",
+                    (t["coin"], t["side"], t["entry_px"], t.get("exit_px"),
+                     t["size"], t["pnl"], t["fees"], t["open_time"],
+                     t.get("close_time"), t.get("hold_ms"), t.get("mae"),
+                     t.get("mfe"), trade_id),
+                )
+            else:
+                # INSERT new trade
+                conn.execute(
+                    """INSERT INTO trades
+                       (wallet, coin, side, entry_px, exit_px, size, pnl, fees,
+                        open_time, close_time, hold_ms, mae, mfe, fill_ids)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (wallet, t["coin"], t["side"], t["entry_px"], t.get("exit_px"),
+                     t["size"], t["pnl"], t["fees"], t["open_time"],
+                     t.get("close_time"), t.get("hold_ms"), t.get("mae"),
+                     t.get("mfe"), fill_ids),
+                )
+
+        # Delete only stale trades (no longer in the new set) and their child records
+        stale_ids = [old_map[fid] for fid in old_map if fid not in new_fill_ids]
+        if stale_ids:
+            placeholders = ",".join("?" * len(stale_ids))
+            conn.execute(f"DELETE FROM trade_screenshots WHERE trade_id IN ({placeholders})", stale_ids)
+            conn.execute(f"DELETE FROM trade_tags WHERE trade_id IN ({placeholders})", stale_ids)
+            conn.execute(f"DELETE FROM trade_notes WHERE trade_id IN ({placeholders})", stale_ids)
+            conn.execute(f"DELETE FROM trades WHERE id IN ({placeholders})", stale_ids)
+
         conn.commit()
     except Exception as e:
         print(f"[DB] Error caching trades: {e}")
