@@ -257,9 +257,12 @@ export default function AnalyticsPage() {
       counts[i]++;
       if ((t.pnl - t.fees) > 0) wins[i]++;
     });
+    const losses = counts.map((c, i) => c - wins[i]);
     return {
       labels: MAE_MFE_BUCKETS.map(b => b.label),
       data: counts.map((c, i) => c > 0 ? parseFloat((wins[i] / c * 100).toFixed(1)) : 0),
+      wins,
+      losses,
       counts,
     };
   }, [filtered]);
@@ -706,25 +709,26 @@ export default function AnalyticsPage() {
             <Bar
               data={{
                 labels: maeWinRateData.labels,
-                datasets: [{
-                  data: maeWinRateData.data,
-                  backgroundColor: maeWinRateData.data.map((v, i) =>
-                    maeWinRateData.counts[i] === 0 ? `rgba(${COLORS.accentRgb},0.2)` :
-                    v > 0 ? `rgba(${COLORS.profitRgb},0.75)` : `rgba(${COLORS.lossRgb},0.75)`
-                  ),
-                  hoverBackgroundColor: maeWinRateData.data.map((v, i) =>
-                    maeWinRateData.counts[i] === 0 ? COLORS.accent :
-                    v > 0 ? COLORS.profit : COLORS.loss
-                  ),
-                  borderColor: maeWinRateData.data.map((v, i) =>
-                    maeWinRateData.counts[i] === 0 ? COLORS.accent :
-                    v > 0 ? COLORS.profit : COLORS.loss
-                  ),
-                  hoverBorderWidth: 2,
-                  borderWidth: 1,
-                  borderRadius: 6,
-                  borderSkipped: false as const,
-                }],
+                datasets: [
+                  {
+                    label: 'Wins',
+                    data: maeWinRateData.wins,
+                    backgroundColor: `rgba(${COLORS.profitRgb},0.75)`,
+                    hoverBackgroundColor: COLORS.profit,
+                    borderWidth: 0,
+                    borderRadius: { topLeft: 6, topRight: 6, bottomLeft: 0, bottomRight: 0 },
+                    borderSkipped: false as const,
+                  },
+                  {
+                    label: 'Losses',
+                    data: maeWinRateData.losses,
+                    backgroundColor: `rgba(${COLORS.lossRgb},0.75)`,
+                    hoverBackgroundColor: COLORS.loss,
+                    borderWidth: 0,
+                    borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 6, bottomRight: 6 },
+                    borderSkipped: false as const,
+                  },
+                ],
               }}
               options={barChartOptions({
                 plugins: {
@@ -734,16 +738,20 @@ export default function AnalyticsPage() {
                     mode: 'index' as const,
                     intersect: false,
                     callbacks: {
-                      label: (item: any) => [
-                        `  Win Rate: ${item.parsed.y.toFixed(1)}%`,
-                        `  Trades: ${maeWinRateData.counts[item.dataIndex]}`,
-                      ],
+                      label: (item: any) => {
+                        const i = item.dataIndex;
+                        if (item.datasetIndex === 1) return null;
+                        return [
+                          `  Win Rate: ${maeWinRateData.data[i]}%`,
+                          `  Wins: ${maeWinRateData.wins[i]}  Losses: ${maeWinRateData.losses[i]}`,
+                        ];
+                      },
                     },
                   },
                 },
                 scales: {
-                  x: { grid: { ...CHART_GRID, display: false }, ticks: CHART_TICKS, border: { display: false } },
-                  y: { grid: CHART_GRID, ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' }, border: { display: false } },
+                  x: { stacked: true, grid: { ...CHART_GRID, display: false }, ticks: CHART_TICKS, border: { display: false } },
+                  y: { stacked: true, grid: CHART_GRID, ticks: CHART_TICKS, border: { display: false } },
                 },
               }) as any}
             />
