@@ -264,6 +264,14 @@ export default function AnalyticsPage() {
     };
   }, [filtered]);
 
+  // ── MAE stop-loss cutoff: max MAE among winners ──
+  const maeCutoff = useMemo(() => {
+    const winners = filtered.filter(t => t.mae != null && (t.pnl - t.fees) > 0);
+    if (!winners.length) return null;
+    const maxMae = Math.max(...winners.map(t => t.mae! * 100));
+    return parseFloat(maxMae.toFixed(2));
+  }, [filtered]);
+
   // ── Expectancy by MFE bucket ──
   const mfeExpectancyData = useMemo(() => {
     const withMfe = filtered.filter(t => t.mfe != null);
@@ -358,6 +366,7 @@ export default function AnalyticsPage() {
     { label: 'Avg Win', value: `+${formatCurrency(stats.avgWin)}`, cls: 'profit-text', sub: `Best ${formatCurrency(stats.bestTrade)}` },
     { label: 'Avg Loss', value: `-${formatCurrency(stats.avgLoss)}`, cls: 'loss-text', sub: `Worst ${formatCurrency(stats.worstTrade)}` },
     { label: 'Expectancy', value: formatCurrency(stats.expectancy), cls: stats.expectancy >= 0 ? 'profit-text' : 'loss-text', sub: 'per trade' },
+    ...(maeCutoff !== null ? [{ label: 'MAE Cutoff', value: `${maeCutoff}%`, cls: 'accent-text', sub: '0% WR beyond' }] : []),
   ];
 
   // Tooltip label for PnL values
@@ -689,17 +698,28 @@ export default function AnalyticsPage() {
 
         {/* ── Win Rate by MAE ── */}
         <div className="an-module">
-          <div className="an-module-header"><span className="an-chart-title">Win Rate by MAE</span></div>
+          <div className="an-module-header">
+            <span className="an-chart-title">Win Rate by MAE</span>
+            {maeCutoff !== null && <span className="secondary-text" style={{ fontSize: 11, marginLeft: 8 }}>Stop cutoff: {maeCutoff}%</span>}
+          </div>
           <div style={{ height: 200 }}>
             <Bar
               data={{
                 labels: maeWinRateData.labels,
                 datasets: [{
                   data: maeWinRateData.data,
-                  backgroundColor: `rgba(${COLORS.accentRgb},0.75)`,
-                  hoverBackgroundColor: COLORS.accent,
-                  borderColor: COLORS.accent,
-                  hoverBorderColor: COLORS.accent,
+                  backgroundColor: maeWinRateData.data.map((v, i) =>
+                    maeWinRateData.counts[i] === 0 ? `rgba(${COLORS.accentRgb},0.2)` :
+                    v > 0 ? `rgba(${COLORS.profitRgb},0.75)` : `rgba(${COLORS.lossRgb},0.75)`
+                  ),
+                  hoverBackgroundColor: maeWinRateData.data.map((v, i) =>
+                    maeWinRateData.counts[i] === 0 ? COLORS.accent :
+                    v > 0 ? COLORS.profit : COLORS.loss
+                  ),
+                  borderColor: maeWinRateData.data.map((v, i) =>
+                    maeWinRateData.counts[i] === 0 ? COLORS.accent :
+                    v > 0 ? COLORS.profit : COLORS.loss
+                  ),
                   hoverBorderWidth: 2,
                   borderWidth: 1,
                   borderRadius: 6,
