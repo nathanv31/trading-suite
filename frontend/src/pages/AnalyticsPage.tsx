@@ -28,6 +28,14 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarEleme
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
+const MAE_MFE_BUCKETS = [
+  { label: '0-0.5%', min: 0, max: 0.5 },
+  { label: '0.5-1%', min: 0.5, max: 1 },
+  { label: '1-2%', min: 1, max: 2 },
+  { label: '2-5%', min: 2, max: 5 },
+  { label: '5%+', min: 5, max: Infinity },
+];
+
 const AGG_OPTIONS: { value: AggregationLevel; label: string }[] = [
   { value: 'trade', label: 'Per Trade' },
   { value: 'daily', label: 'Daily' },
@@ -235,6 +243,50 @@ export default function AnalyticsPage() {
     const dl = db.map((_, i) => `$${(minP + i * bs).toFixed(0)}`);
     const dc = dl.map(l => parseFloat(l.slice(1)) >= 0 ? `rgba(${COLORS.profitRgb},0.75)` : `rgba(${COLORS.lossRgb},0.75)`);
     return { labels: dl, data: db, colors: dc };
+  }, [filtered]);
+
+  // ── Win Rate by MAE bucket ──
+  const maeWinRateData = useMemo(() => {
+    const withMae = filtered.filter(t => t.mae != null);
+    const counts = MAE_MFE_BUCKETS.map(() => 0);
+    const wins = MAE_MFE_BUCKETS.map(() => 0);
+    withMae.forEach(t => {
+      const pct = (t.mae!) * 100;
+      const idx = MAE_MFE_BUCKETS.findIndex(b => pct >= b.min && pct < b.max);
+      const i = idx >= 0 ? idx : MAE_MFE_BUCKETS.length - 1;
+      counts[i]++;
+      if ((t.pnl - t.fees) > 0) wins[i]++;
+    });
+    return {
+      labels: MAE_MFE_BUCKETS.map(b => b.label),
+      data: counts.map((c, i) => c > 0 ? parseFloat((wins[i] / c * 100).toFixed(1)) : 0),
+      counts,
+    };
+  }, [filtered]);
+
+  // ── Expectancy by MFE bucket ──
+  const mfeExpectancyData = useMemo(() => {
+    const withMfe = filtered.filter(t => t.mfe != null);
+    const buckets = MAE_MFE_BUCKETS.map(() => [] as number[]);
+    withMfe.forEach(t => {
+      const pct = (t.mfe!) * 100;
+      const idx = MAE_MFE_BUCKETS.findIndex(b => pct >= b.min && pct < b.max);
+      const i = idx >= 0 ? idx : MAE_MFE_BUCKETS.length - 1;
+      buckets[i].push(t.pnl - t.fees);
+    });
+    return {
+      labels: MAE_MFE_BUCKETS.map(b => b.label),
+      data: buckets.map(b => {
+        if (!b.length) return 0;
+        const w = b.filter(v => v > 0);
+        const l = b.filter(v => v < 0);
+        const wr = w.length / b.length;
+        const avgW = w.length ? w.reduce((s, v) => s + v, 0) / w.length : 0;
+        const avgL = l.length ? Math.abs(l.reduce((s, v) => s + v, 0) / l.length) : 0;
+        return parseFloat((wr * avgW - (1 - wr) * avgL).toFixed(2));
+      }),
+      counts: buckets.map(b => b.length),
+    };
   }, [filtered]);
 
   // ── Gradient callback for equity ──
@@ -631,6 +683,75 @@ export default function AnalyticsPage() {
                   y: { grid: CHART_GRID, ticks: CHART_TICKS, border: { display: false } },
                 },
               } as any}
+            />
+          </div>
+        </div>
+
+        {/* ── Win Rate by MAE ── */}
+        <div className="an-module">
+          <div className="an-module-header"><span className="an-chart-title">Win Rate by MAE</span></div>
+          <div style={{ height: 200 }}>
+            <Bar
+              data={{
+                labels: maeWinRateData.labels,
+                datasets: [{
+                  data: maeWinRateData.data,
+                  backgroundColor: `rgba(${COLORS.accentRgb},0.75)`,
+                  hoverBackgroundColor: COLORS.accent,
+                  borderColor: COLORS.accent,
+                  hoverBorderColor: COLORS.accent,
+                  hoverBorderWidth: 2,
+                  borderWidth: 1,
+                  borderRadius: 6,
+                  borderSkipped: false as const,
+                }],
+              }}
+              options={barChartOptions({
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    ...tooltipConfig,
+                    mode: 'index' as const,
+                    intersect: false,
+                    callbacks: {
+                      label: (item: any) => [
+                        `  Win Rate: ${item.parsed.y.toFixed(1)}%`,
+                        `  Trades: ${maeWinRateData.counts[item.dataIndex]}`,
+                      ],
+                    },
+                  },
+                },
+                scales: {
+                  x: { grid: { ...CHART_GRID, display: false }, ticks: CHART_TICKS, border: { display: false } },
+                  y: { grid: CHART_GRID, ticks: { ...CHART_TICKS, callback: (v: any) => v + '%' }, border: { display: false } },
+                },
+              }) as any}
+            />
+          </div>
+        </div>
+
+        {/* ── Expectancy by MFE ── */}
+        <div className="an-module">
+          <div className="an-module-header"><span className="an-chart-title">Expectancy by MFE</span></div>
+          <div style={{ height: 200 }}>
+            <Bar
+              data={{ labels: mfeExpectancyData.labels, datasets: [enhancedBarDataset(mfeExpectancyData.data)] }}
+              options={barChartOptions({
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    ...tooltipConfig,
+                    mode: 'index' as const,
+                    intersect: false,
+                    callbacks: {
+                      label: (item: any) => [
+                        `  Expectancy: ${formatCurrency(item.parsed.y)}`,
+                        `  Trades: ${mfeExpectancyData.counts[item.dataIndex]}`,
+                      ],
+                    },
+                  },
+                },
+              }) as any}
             />
           </div>
         </div>
