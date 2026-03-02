@@ -158,7 +158,14 @@ class EnrichmentManager:
 
                     new_mfe = round(abs(mfe_px - entry_px) / entry_px, 6)
                     new_mae = round(abs(mae_px - entry_px) / entry_px, 6)
-                    all_updates.append((new_mae, new_mfe, t["id"]))
+
+                    # Never downgrade MAE/MFE — existing values may come from
+                    # fill prices or a prior enrichment with more complete data.
+                    old_mae = t.get("mae") or 0
+                    old_mfe = t.get("mfe") or 0
+                    final_mae = max(new_mae, old_mae)
+                    final_mfe = max(new_mfe, old_mfe)
+                    all_updates.append((final_mae, final_mfe, t["id"]))
 
                 job.progress += 1
 
@@ -195,7 +202,13 @@ class EnrichmentManager:
         ).fetchall()
 
         if rows:
-            return [(r["time"], r["high"], r["low"]) for r in rows]
+            cached_first = rows[0]["time"]
+            cached_last = rows[-1]["time"]
+            # Only use cache if it covers the full requested range
+            # (within 1 candle tolerance at each boundary)
+            if cached_first <= cache_start + 60000 and cached_last >= end - 60000:
+                return [(r["time"], r["high"], r["low"]) for r in rows]
+            # Incomplete cache — fall through to API fetch
 
         # Check negative cache — skip ranges the API already returned empty for
         neg = conn.execute(
