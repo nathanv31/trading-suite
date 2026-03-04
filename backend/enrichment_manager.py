@@ -206,8 +206,12 @@ class EnrichmentManager:
             cached_last = rows[-1]["time"]
             # Only use cache if it covers the full requested range
             # (within 1 candle tolerance at each boundary)
+            # AND has sufficient density (no large gaps from non-contiguous
+            # fetches for different trade batches on the same coin)
             if cached_first <= cache_start + 60000 and cached_last >= end - 60000:
-                return [(r["time"], r["high"], r["low"]) for r in rows]
+                expected_candles = max(1, (end - cache_start) / 60000)
+                if len(rows) >= expected_candles * 0.8:
+                    return [(r["time"], r["high"], r["low"]) for r in rows]
             # Incomplete cache — fall through to API fetch
 
         # Check negative cache — skip ranges the API already returned empty for
