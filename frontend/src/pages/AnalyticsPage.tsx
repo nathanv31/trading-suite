@@ -91,8 +91,6 @@ export default function AnalyticsPage() {
   const equityChartRef = useRef<ChartJS<'line'> | null>(null) as any;
   const ddChartRef = useRef<ChartJS<'line'> | null>(null) as any;
 
-  const isUnfiltered = !sideFilter && !resultFilter && !coinFilter && selectedTags.size === 0 && !dateFrom && !dateTo;
-
   useEffect(() => {
     if (wallet && trades.length > 0) {
       getPnlSummary(wallet).then(setPnlSummary).catch(() => {});
