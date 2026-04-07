@@ -28,6 +28,14 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarEleme
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
+const MAE_MFE_BUCKETS = [
+  { label: '0-0.5%', min: 0, max: 0.5 },
+  { label: '0.5-1%', min: 0.5, max: 1 },
+  { label: '1-2%', min: 1, max: 2 },
+  { label: '2-5%', min: 2, max: 5 },
+  { label: '5%+', min: 5, max: Infinity },
+];
+
 const AGG_OPTIONS: { value: AggregationLevel; label: string }[] = [
   { value: 'trade', label: 'Per Trade' },
   { value: 'daily', label: 'Daily' },
@@ -237,6 +245,61 @@ export default function AnalyticsPage() {
     return { labels: dl, data: db, colors: dc };
   }, [filtered]);
 
+  // ── Win Rate by MAE bucket ──
+  const maeWinRateData = useMemo(() => {
+    const withMae = filtered.filter(t => t.mae != null);
+    const counts = MAE_MFE_BUCKETS.map(() => 0);
+    const wins = MAE_MFE_BUCKETS.map(() => 0);
+    withMae.forEach(t => {
+      const pct = (t.mae!) * 100;
+      const idx = MAE_MFE_BUCKETS.findIndex(b => pct >= b.min && pct < b.max);
+      const i = idx >= 0 ? idx : MAE_MFE_BUCKETS.length - 1;
+      counts[i]++;
+      if ((t.pnl - t.fees) > 0) wins[i]++;
+    });
+    const losses = counts.map((c, i) => c - wins[i]);
+    return {
+      labels: MAE_MFE_BUCKETS.map(b => b.label),
+      data: counts.map((c, i) => c > 0 ? parseFloat((wins[i] / c * 100).toFixed(1)) : 0),
+      wins,
+      losses,
+      counts,
+    };
+  }, [filtered]);
+
+  // ── MAE stop-loss cutoff: max MAE among winners ──
+  const maeCutoff = useMemo(() => {
+    const winners = filtered.filter(t => t.mae != null && (t.pnl - t.fees) > 0);
+    if (!winners.length) return null;
+    const maxMae = Math.max(...winners.map(t => t.mae! * 100));
+    return parseFloat(maxMae.toFixed(2));
+  }, [filtered]);
+
+  // ── Expectancy by MFE bucket ──
+  const mfeExpectancyData = useMemo(() => {
+    const withMfe = filtered.filter(t => t.mfe != null);
+    const buckets = MAE_MFE_BUCKETS.map(() => [] as number[]);
+    withMfe.forEach(t => {
+      const pct = (t.mfe!) * 100;
+      const idx = MAE_MFE_BUCKETS.findIndex(b => pct >= b.min && pct < b.max);
+      const i = idx >= 0 ? idx : MAE_MFE_BUCKETS.length - 1;
+      buckets[i].push(t.pnl - t.fees);
+    });
+    return {
+      labels: MAE_MFE_BUCKETS.map(b => b.label),
+      data: buckets.map(b => {
+        if (!b.length) return 0;
+        const w = b.filter(v => v > 0);
+        const l = b.filter(v => v < 0);
+        const wr = w.length / b.length;
+        const avgW = w.length ? w.reduce((s, v) => s + v, 0) / w.length : 0;
+        const avgL = l.length ? Math.abs(l.reduce((s, v) => s + v, 0) / l.length) : 0;
+        return parseFloat((wr * avgW - (1 - wr) * avgL).toFixed(2));
+      }),
+      counts: buckets.map(b => b.length),
+    };
+  }, [filtered]);
+
   // ── Gradient callback for equity ──
   const getEquityGradient = useCallback(() => {
     const chart = equityChartRef.current;
@@ -306,6 +369,7 @@ export default function AnalyticsPage() {
     { label: 'Avg Win', value: `+${formatCurrency(stats.avgWin)}`, cls: 'profit-text', sub: `Best ${formatCurrency(stats.bestTrade)}` },
     { label: 'Avg Loss', value: `-${formatCurrency(stats.avgLoss)}`, cls: 'loss-text', sub: `Worst ${formatCurrency(stats.worstTrade)}` },
     { label: 'Expectancy', value: formatCurrency(stats.expectancy), cls: stats.expectancy >= 0 ? 'profit-text' : 'loss-text', sub: 'per trade' },
+    ...(maeCutoff !== null ? [{ label: 'MAE Cutoff', value: `${maeCutoff}%`, cls: 'accent-text', sub: '0% WR beyond' }] : []),
   ];
 
   // Tooltip label for PnL values
@@ -631,6 +695,91 @@ export default function AnalyticsPage() {
                   y: { grid: CHART_GRID, ticks: CHART_TICKS, border: { display: false } },
                 },
               } as any}
+            />
+          </div>
+        </div>
+
+        {/* ── Win Rate by MAE ── */}
+        <div className="an-module">
+          <div className="an-module-header">
+            <span className="an-chart-title">Win Rate by MAE</span>
+            {maeCutoff !== null && <span className="secondary-text" style={{ fontSize: 11, marginLeft: 8 }}>Stop cutoff: {maeCutoff}%</span>}
+          </div>
+          <div style={{ height: 200 }}>
+            <Bar
+              data={{
+                labels: maeWinRateData.labels,
+                datasets: [
+                  {
+                    label: 'Wins',
+                    data: maeWinRateData.wins,
+                    backgroundColor: `rgba(${COLORS.profitRgb},0.75)`,
+                    hoverBackgroundColor: COLORS.profit,
+                    borderWidth: 0,
+                    borderRadius: { topLeft: 6, topRight: 6, bottomLeft: 0, bottomRight: 0 },
+                    borderSkipped: false as const,
+                  },
+                  {
+                    label: 'Losses',
+                    data: maeWinRateData.losses,
+                    backgroundColor: `rgba(${COLORS.lossRgb},0.75)`,
+                    hoverBackgroundColor: COLORS.loss,
+                    borderWidth: 0,
+                    borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 6, bottomRight: 6 },
+                    borderSkipped: false as const,
+                  },
+                ],
+              }}
+              options={barChartOptions({
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    ...tooltipConfig,
+                    mode: 'index' as const,
+                    intersect: false,
+                    callbacks: {
+                      label: (item: any) => {
+                        const i = item.dataIndex;
+                        if (item.datasetIndex === 1) return null;
+                        return [
+                          `  Win Rate: ${maeWinRateData.data[i]}%`,
+                          `  Wins: ${maeWinRateData.wins[i]}  Losses: ${maeWinRateData.losses[i]}`,
+                        ];
+                      },
+                    },
+                  },
+                },
+                scales: {
+                  x: { stacked: true, grid: { ...CHART_GRID, display: false }, ticks: CHART_TICKS, border: { display: false } },
+                  y: { stacked: true, grid: CHART_GRID, ticks: CHART_TICKS, border: { display: false } },
+                },
+              }) as any}
+            />
+          </div>
+        </div>
+
+        {/* ── Expectancy by MFE ── */}
+        <div className="an-module">
+          <div className="an-module-header"><span className="an-chart-title">Expectancy by MFE</span></div>
+          <div style={{ height: 200 }}>
+            <Bar
+              data={{ labels: mfeExpectancyData.labels, datasets: [enhancedBarDataset(mfeExpectancyData.data)] }}
+              options={barChartOptions({
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    ...tooltipConfig,
+                    mode: 'index' as const,
+                    intersect: false,
+                    callbacks: {
+                      label: (item: any) => [
+                        `  Expectancy: ${formatCurrency(item.parsed.y)}`,
+                        `  Trades: ${mfeExpectancyData.counts[item.dataIndex]}`,
+                      ],
+                    },
+                  },
+                },
+              }) as any}
             />
           </div>
         </div>
